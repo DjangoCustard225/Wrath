@@ -1,4 +1,8 @@
-# Wrath
+<p align="center">
+  <img src="AppIcon.png" width="112" alt="Wrath app icon">
+</p>
+
+<h1 align="center">Wrath</h1>
 
 Wrath is a simple video and audio downloader for iOS 27, with a native Liquid Glass interface. Paste a link, choose your options, and save the file to your device.
 
