@@ -270,7 +270,7 @@ def download_subtitle(info, options, ydl):
                 cues=parse_subtitle_cues(content, fmt['ext']))
 
 
-def make_plan(info, kind):
+def make_plan(info, kind, ydl=None):
     if info.get('_type') in ('playlist', 'multi_video') or info.get('entries') is not None:
         raise ValueError('Paste a link to one video. Playlist downloads are not supported yet.')
     if info.get('is_live'):
@@ -291,6 +291,14 @@ def make_plan(info, kind):
                            streaming=protocol.startswith('m3u8'),
                            bytes=fmt.get('filesize') or fmt.get('filesize_approx'),
                            chunkSize=(fmt.get('downloader_options') or {}).get('http_chunk_size')))
+        if ydl is not None and info.get('extractor_key') == 'TikTok' and protocol in ('http', 'https'):
+            # URLSession needs the same cookies as yt-dlp's request handler.
+            # Preserve scope instead of forwarding an unscoped Cookie header.
+            cookies = [dict(name=c.name, value=c.value, domain=c.domain, path=c.path or '/',
+                            secure=c.secure, expires=c.expires, hostOnly=not c.domain_specified)
+                       for c in ydl.cookiejar.get_cookies_for_url(url)]
+            if cookies:
+                tracks[-1]['cookies'] = cookies
     if not tracks or len(tracks) > 2:
         raise ValueError('No compatible media tracks were found.')
     audio_codec = next((f.get('acodec', '') for f in formats if f.get('acodec') not in (None, 'none')), '')
@@ -445,6 +453,23 @@ def codec_availability(info, ydl=None):
                 maxHeight=int(max(heights)) if heights else None)
 
 
+# TikTok rejects some of yt-dlp's randomly selected Chrome versions.
+# Keep inspection and media planning on the same verified browser identity.
+TIKTOK_USER_AGENT = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                     'AppleWebKit/537.36 (KHTML, like Gecko) '
+                     'Chrome/143.0.0.0 Safari/537.36')
+
+
+def is_tiktok_url(url):
+    if not isinstance(url, str):
+        return False
+    try:
+        host = urllib.parse.urlparse(url).hostname or ''
+    except ValueError:
+        return False
+    return any(host == domain or host.endswith('.' + domain) for domain in ('tiktok.com', 'tiktokv.com'))
+
+
 def extract(request):
     data = {}
     try:
@@ -463,12 +488,14 @@ def extract(request):
                        # Avoid generating translations of uploaded YouTube captions.
                        extractor_args={'youtube': {'skip': ['translated_subs']}},
                        listformats=inspecting, simulate='list_only' if inspecting else False)
+        if is_tiktok_url(data.get('url')):
+            ydl_options['http_headers'] = {'User-Agent': TIKTOK_USER_AGENT}
         with (InspectionYoutubeDL if inspecting else yt_dlp.YoutubeDL)(ydl_options) as ydl:
             info = ydl.extract_info(data['url'], download=False)
             check_cancelled()
             if inspecting:
                 return json.dumps({'availability': codec_availability(info, ydl)})
-            plan = make_plan(info, data['kind'])
+            plan = make_plan(info, data['kind'], ydl)
             if options.get('embedSubtitles') and data['kind'] == 'video':
                 try:
                     plan['subtitle'] = download_subtitle(info, options, ydl)
@@ -480,6 +507,11 @@ def extract(request):
         return json.dumps({'plan': plan})
     except Exception as error:
         message = str(error).removeprefix('ERROR: ')
+        if is_tiktok_url(data.get('url')) and any(reason in message for reason in (
+                'Unexpected response from webpage request', 'Unable to extract challenge data',
+                'Unable to extract universal data for rehydration')):
+            message = ('TikTok returned a verification page instead of video details. '
+                       'Retry the link, or open it in TikTok or Safari to check that it is available.')
         if 'Requested format is not available' in message and any((data.get('options') or {}).get(key, 'automatic') != 'automatic' for key in ('videoCodec', 'audioCodec')):
             message = 'The requested codec is not available at this quality. Choose Automatic, another codec, or a different quality.'
         return json.dumps({'error': message[:1200] or 'Unable to resolve this link.'})

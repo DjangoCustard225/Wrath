@@ -26,6 +26,27 @@ public struct Quality: RawRepresentable, Codable, Hashable, Sendable {
         try container.encode(rawValue)
     }
 }
+public struct MediaCookie: Codable, Sendable {
+    public let name: String
+    public let value: String
+    public let domain: String
+    public let path: String
+    public let secure: Bool
+    public let hostOnly: Bool
+    public let expires: Double?
+    public init(
+        name: String, value: String, domain: String, path: String = "/", secure: Bool = false, expires: Double? = nil,
+        hostOnly: Bool? = nil
+    ) {
+        self.name = name
+        self.value = value
+        self.domain = domain
+        self.path = path
+        self.secure = secure
+        self.hostOnly = hostOnly ?? !domain.hasPrefix(".")
+        self.expires = expires
+    }
+}
 public struct MediaTrack: Codable, Sendable {
     public let url: URL
     public let headers: [String: String]
@@ -33,9 +54,10 @@ public struct MediaTrack: Codable, Sendable {
     public let streaming: Bool
     public let bytes: Int64?
     public let chunkSize: Int64?
+    public let cookies: [MediaCookie]?
     public init(
         url: URL, headers: [String: String] = [:], role: String = "video", streaming: Bool = false, bytes: Int64? = nil,
-        chunkSize: Int64? = nil
+        chunkSize: Int64? = nil, cookies: [MediaCookie]? = nil
     ) {
         self.url = url
         self.headers = headers
@@ -43,6 +65,7 @@ public struct MediaTrack: Codable, Sendable {
         self.streaming = streaming
         self.bytes = bytes
         self.chunkSize = chunkSize
+        self.cookies = cookies
     }
 }
 public struct SubtitleCue: Codable, Sendable {

@@ -85,14 +85,22 @@ private final class DownloadTransport: NSObject, URLSessionDownloadDelegate, @un
         }
     }
     private let directory: URL
+    private let cookies: [MediaCookie]
     private let lock = NSLock()
     private var pending: [Int: Pending] = [:]
     private var cancelled = false
     private var session: URLSession!
-    init(directory: URL, connections: Int) {
+    init(directory: URL, connections: Int, track: MediaTrack) {
         self.directory = directory
+        cookies = track.cookies ?? []
         super.init()
         let config = URLSessionConfiguration.ephemeral
+        // Explicit matching keeps cookie scope consistent across platforms and
+        // redirects, without adding extraction cookies to shared storage.
+        if !cookies.isEmpty {
+            config.httpShouldSetCookies = false
+            config.httpCookieStorage = nil
+        }
         config.httpMaximumConnectionsPerHost = connections
         config.timeoutIntervalForRequest = 20
         config.timeoutIntervalForResource = 24 * 60 * 60
@@ -105,6 +113,7 @@ private final class DownloadTransport: NSObject, URLSessionDownloadDelegate, @un
     func fetch(_ request: URLRequest, progress: @escaping @Sendable (Int64, HTTPURLResponse?) -> Void) async throws
         -> DownloadedPart
     {
+        let request = applyingCookies(to: request)
         let control = RequestControl()
         return try await withTaskCancellationHandler {
             try Task.checkCancellation()
@@ -127,6 +136,47 @@ private final class DownloadTransport: NSObject, URLSessionDownloadDelegate, @un
         } onCancel: {
             control.cancel()
         }
+    }
+    private func applyingCookies(to original: URLRequest) -> URLRequest {
+        guard !cookies.isEmpty else { return original }
+        var request = original
+        request.httpShouldHandleCookies = false
+        guard let url = request.url, let host = url.host?.lowercased() else {
+            request.setValue(nil, forHTTPHeaderField: "Cookie")
+            return request
+        }
+        let path = URLComponents(url: url, resolvingAgainstBaseURL: false)?.percentEncodedPath ?? "/"
+        let requestPath = path.isEmpty ? "/" : path
+        let now = Date().timeIntervalSince1970
+        let matching = cookies.compactMap { cookie -> HTTPCookie? in
+            let domain = cookie.domain.lowercased().drop(while: { $0 == "." })
+            guard !domain.isEmpty,
+                host == domain || (!cookie.hostOnly && host.hasSuffix("." + domain)),
+                !cookie.secure || url.scheme?.lowercased() == "https",
+                cookie.expires.map({ $0.isFinite && $0 > now }) ?? true
+            else { return nil }
+            let cookiePath = cookie.path.hasPrefix("/") ? cookie.path : "/"
+            guard
+                requestPath == cookiePath
+                    || (requestPath.hasPrefix(cookiePath)
+                        && (cookiePath.hasSuffix("/") || requestPath.dropFirst(cookiePath.count).first == "/")),
+                !cookie.name.isEmpty,
+                cookie.name.utf8.allSatisfy({ $0 > 32 && $0 < 127 && $0 != 59 && $0 != 61 }),
+                cookie.value.utf8.allSatisfy({ $0 >= 32 && $0 != 127 && $0 != 59 })
+            else { return nil }
+            return HTTPCookie(properties: [
+                .name: cookie.name, .value: cookie.value, .domain: cookie.domain, .path: cookiePath,
+            ])
+        }
+        request.setValue(
+            HTTPCookie.requestHeaderFields(with: matching)["Cookie"], forHTTPHeaderField: "Cookie")
+        return request
+    }
+    func urlSession(
+        _ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+        newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void
+    ) {
+        completionHandler(applyingCookies(to: request))
     }
     func cancel() {
         lock.withLock { cancelled = true }
@@ -281,7 +331,7 @@ public final class MediaTransfer: @unchecked Sendable {
             ".parts-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: directory) }
-        let transport = DownloadTransport(directory: directory, connections: connections)
+        let transport = DownloadTransport(directory: directory, connections: connections, track: track)
         let alreadyCancelled = lock.withLock {
             self.transport = transport
             return cancelled
