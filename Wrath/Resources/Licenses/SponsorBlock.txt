@@ -1,0 +1,10 @@
+Wrath uses SponsorBlock community segment data from https://sponsor.ajay.app/.
+
+The SponsorBlock database and API data are licensed under Creative Commons
+Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0).
+
+License: https://creativecommons.org/licenses/by-nc-sa/4.0/
+API/data license: https://github.com/ajayyy/SponsorBlock/wiki/Database-and-API-License
+
+Wrath uses this data to mark chapters or remove user-selected categories.
+SponsorBlock is queried only when the option is enabled for a YouTube link.

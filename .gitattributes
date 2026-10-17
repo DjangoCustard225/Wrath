@@ -1,0 +1,4 @@
+# Preserve upstream license text verbatim, including its original spacing.
+Dependencies/FFmpegBuild/LICENSE* -whitespace
+Dependencies/FFmpegBuild/LICENSES/** -whitespace
+Wrath/Resources/Licenses/** -whitespace

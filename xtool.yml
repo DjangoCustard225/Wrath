@@ -1,0 +1,10 @@
+version: 1
+product: Wrath
+bundleID: app.wrath.downloader
+infoPath: Wrath/Info.plist
+iconPath: AppIcon.png
+resources:
+  - Wrath/PrivacyInfo.xcprivacy
+  - Wrath/Resources/wrath_worker.py
+  - Wrath/Resources/packages
+  - Wrath/Resources/Licenses

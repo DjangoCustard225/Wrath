@@ -1,0 +1,17 @@
+.build/
+.swiftpm/
+.bsp/
+xtool/
+Dependencies/Python.xcframework/
+Dependencies/FFmpegBuild/Sources/
+Dependencies/FFmpegBuild/.build/
+Dependencies/FFmpegBuild/.prepared-sha256
+Wrath/Resources/packages/
+*.ipa
+__pycache__/
+Wrath.xcodeproj/
+dist/
+.DS_Store
+*.xcuserstate
+.cache/
+*.sha256

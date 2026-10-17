@@ -1,0 +1,55 @@
+{
+  "fill": {
+    "linear-gradient": [
+      "srgb:0.16078,0.16863,0.18824,1.00000",
+      "srgb:0.06275,0.06667,0.07843,1.00000"
+    ]
+  },
+  "fill-specializations": [
+    {
+      "appearance": "dark",
+      "value": "system-dark"
+    },
+    {
+      "appearance": "tinted",
+      "value": "automatic"
+    }
+  ],
+  "groups": [
+    {
+      "name": "Download arrow",
+      "layers": [
+        {
+          "name": "Arrow",
+          "image-name": "Arrow.svg",
+          "fill": {
+            "linear-gradient": [
+              "srgb:1.00000,0.80000,0.52157,1.00000",
+              "srgb:1.00000,0.54118,0.15686,1.00000"
+            ]
+          },
+          "fill-specializations": [
+            {
+              "appearance": "tinted",
+              "value": {
+                "solid": "extended-gray:1.00000,1.00000"
+              }
+            }
+          ]
+        }
+      ],
+      "specular": true,
+      "shadow": {
+        "kind": "neutral",
+        "opacity": 0.1
+      },
+      "translucency": {
+        "enabled": true,
+        "value": 0.12
+      }
+    }
+  ],
+  "supported-platforms": {
+    "squares": "shared"
+  }
+}
