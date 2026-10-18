@@ -12,10 +12,12 @@ import Observation
     private struct Request: Equatable {
         let url: URL?
         let revision: Int
+        let context: UUID?
     }
     @ObservationIgnored private var lastRequest: Request?
     @ObservationIgnored private var requestID = UUID()
     @ObservationIgnored private var operation: Task<CodecAvailability, Error>?
+    @ObservationIgnored private var deadline: Task<Void, Never>?
     @ObservationIgnored private let debounce: Duration
     @ObservationIgnored private let timeout: Duration
     @ObservationIgnored private let load: @Sendable (URL) async throws -> CodecAvailability
@@ -29,8 +31,8 @@ import Observation
         self.load = load
     }
 
-    public func inspect(_ url: URL?) async {
-        let key = Request(url: url, revision: revision)
+    public func inspect(_ url: URL?, context: UUID? = nil) async {
+        let key = Request(url: url, revision: revision, context: context)
         // A result/error must survive view reappearance. Only a new URL or an
         // explicit Retry may clear it and start another extraction.
         if lastRequest == key,
@@ -39,6 +41,7 @@ import Observation
             return
         }
         operation?.cancel()
+        deadline?.cancel()
         let request = UUID()
         requestID = request
         lastRequest = key
@@ -61,16 +64,10 @@ import Observation
         operation = work
         // A noncooperative socket/engine must never leave the UI spinning
         // indefinitely. Late results are discarded after this deadline.
-        let deadline = Task { [weak self, timeout] in
-            do { try await Task.sleep(for: timeout) } catch { return }
-            guard let self, self.requestID == request, self.loading else { return }
-            self.error = "Checking this link took too long. Retry to read its available formats."
-            self.loading = false
-            work.cancel()
-        }
+        scheduleDeadline(request: request, work: work, after: timeout)
         defer {
-            deadline.cancel()
             if requestID == request {
+                deadline?.cancel()
                 loading = false
                 operation = nil
             }
@@ -90,6 +87,16 @@ import Observation
                 }
             }
         } onCancel: {
+            work.cancel()
+        }
+    }
+    private func scheduleDeadline(request: UUID, work: Task<CodecAvailability, Error>, after timeout: Duration) {
+        deadline?.cancel()
+        deadline = Task { [weak self] in
+            do { try await Task.sleep(for: timeout) } catch { return }
+            guard let self, self.requestID == request, self.loading else { return }
+            self.error = "Checking this link took too long. Retry to read its available formats."
+            self.loading = false
             work.cancel()
         }
     }

@@ -1,6 +1,10 @@
 // Deterministic native project; app sources stay shared with the Linux SwiftPM build.
 import Foundation
 
+let variant = ProcessInfo.processInfo.environment["WRATH_VARIANT"] ?? "modern"
+guard ["modern", "compatibility"].contains(variant) else { fatalError("Invalid WRATH_VARIANT") }
+let minimumIOS = variant == "compatibility" ? "17.0" : "26.0"
+let variantFlag = variant == "compatibility" ? "WRATH_COMPATIBILITY" : ""
 let fm = FileManager.default
 let infoData = try Data(contentsOf: URL(fileURLWithPath: "Wrath/Info.plist"))
 let info = try PropertyListSerialization.propertyList(from: infoData, format: nil) as? [String: Any]
@@ -56,7 +60,7 @@ objects += [
 ]
 for (index, name) in ["Debug", "Release"].enumerated() {
     let projectSettings =
-        "CLANG_ENABLE_MODULES = YES; SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = 27.0; SWIFT_VERSION = 5.0; SWIFT_OPTIMIZATION_LEVEL = \"\(index == 0 ? "-Onone" : "-O")\"; DEBUG_INFORMATION_FORMAT = \"\(index == 0 ? "dwarf" : "dwarf-with-dsym")\"; \(index == 0 ? "SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;" : "")"
+        "CLANG_ENABLE_MODULES = YES; SDKROOT = iphoneos; IPHONEOS_DEPLOYMENT_TARGET = \(minimumIOS); SWIFT_ACTIVE_COMPILATION_CONDITIONS = \"$(inherited) \(variantFlag) \(index == 0 ? "DEBUG" : "")\"; SWIFT_VERSION = 5.0; SWIFT_OPTIMIZATION_LEVEL = \"\(index == 0 ? "-Onone" : "-O")\"; DEBUG_INFORMATION_FORMAT = \"\(index == 0 ? "dwarf" : "dwarf-with-dsym")\";"
     let appSettings =
         "ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon; CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = \(buildNumber); GENERATE_INFOPLIST_FILE = YES; INFOPLIST_FILE = Wrath/Info.plist; MARKETING_VERSION = \(appVersion); PRODUCT_BUNDLE_IDENTIFIER = app.wrath.downloader; PRODUCT_NAME = \"$(TARGET_NAME)\"; TARGETED_DEVICE_FAMILY = \"1,2\"; LD_RUNPATH_SEARCH_PATHS = \"$(inherited) @executable_path/Frameworks\"; INFOPLIST_KEY_UILaunchScreen_Generation = YES; INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES; INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = \"UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight\"; INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = \"UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight\";"
     objects.append(

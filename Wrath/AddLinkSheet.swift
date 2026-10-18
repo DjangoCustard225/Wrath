@@ -7,12 +7,17 @@ struct AddLinkSheet: View {
     @Bindable var store: DownloadStore
     @State var link: String
     @State private var inspector = LinkInspector()
+    @State private var socialAccess = SocialAccessStore.shared
     @State private var keyboardVisible = false
     @State private var showingOptions = false
+    @State private var loginSite: SocialPlatform?
     let added: () -> Void
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focused: Bool
     private var validURL: URL? { LinkInput.parse(link) }
+    private var socialSite: SocialPlatform? {
+        validURL.flatMap(SocialPlatform.forURL).flatMap { $0.supportsCookies ? $0 : nil }
+    }
     private var isYouTube: Bool { validURL.flatMap(YouTubeLink.videoID) != nil }
     private var availability: CodecAvailability? { inspector.sourceURL == validURL ? inspector.availability : nil }
     private var invalidOptions: Bool {
@@ -21,28 +26,44 @@ struct AddLinkSheet: View {
             || (isYouTube && store.options.sponsorMode != .off && store.options.sponsorCategories.isEmpty)
     }
     private var sourceReady: Bool { validURL != nil && availability?.mediaKinds.isEmpty == false }
-    private var canDownload: Bool { sourceReady && !invalidOptions }
+    private var canDownload: Bool { sourceReady && !invalidOptions && store.canAddDownload }
     var body: some View {
         NavigationStack {
             page {
                 sourceCard
+                VStack(spacing: 12) {
+                    CohesivePasteButton { value in
+                        link = value.trimmingCharacters(in: .whitespacesAndNewlines)
+                        focused = false
+                    }
+                    if !link.isEmpty { clearLinkButton }
+                }
                 if validURL != nil && !sourceReady {
                     SourceInspectionStatus(inspector: inspector, url: validURL)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .modifier(MediaCardStyle(padding: 20))
                 }
             }
-            .safeAreaBar(edge: .bottom, spacing: 0) {
+            .wrathBottomBar {
                 if sourceReady { nextButton }
             }
-            .scrollEdgeEffectHidden(focused || keyboardVisible, for: .bottom)
+            .wrathHideBottomEdge(focused || keyboardVisible)
             .navigationTitle("Add a link").navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } } }
             .navigationDestination(isPresented: $showingOptions) { downloadPage }
         }
         // The sheet owns inspection so navigation never cancels or restarts it.
-        .task(id: LinkInspectionRequest(url: validURL, revision: inspector.revision)) {
-            await inspector.inspect(validURL)
+        .task(
+            id: LinkInspectionRequest(
+                url: validURL, revision: inspector.revision,
+                accessRevision: socialSite != nil ? socialAccess.revision : nil)
+        ) {
+            await inspector.inspect(
+                validURL,
+                context: socialSite != nil ? socialAccess.revision : nil)
+        }
+        .sheet(item: $loginSite) { site in
+            SocialLoginView(site: site)
         }
         .presentationDetents([.large]).presentationDragIndicator(.visible)
         .presentationBackground(Color(uiColor: .systemGroupedBackground))
@@ -68,7 +89,7 @@ struct AddLinkSheet: View {
                 .padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 24)
         }
         .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
-        .scrollEdgeEffectStyle(.soft, for: .all)
+        .wrathSoftScrollEdges()
         .scrollDismissesKeyboard(.interactively)
     }
     private var downloadPage: some View {
@@ -80,8 +101,8 @@ struct AddLinkSheet: View {
                 optionsCard(availability)
             }
         }
-        .safeAreaBar(edge: .bottom, spacing: 0) { downloadButton }
-        .scrollEdgeEffectHidden(focused || keyboardVisible, for: .bottom)
+        .wrathBottomBar { downloadButton }
+        .wrathHideBottomEdge(focused || keyboardVisible)
         .navigationTitle("Download options").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() } } }
     }
@@ -115,29 +136,47 @@ struct AddLinkSheet: View {
             }
             Divider()
             TextField("Paste a video or audio link", text: $link, axis: .vertical)
-                .font(.subheadline).lineLimit(3...5)
+                .font(.subheadline).lineLimit(1...5)
                 .keyboardType(.URL).textContentType(.URL).textInputAutocapitalization(.never)
                 .autocorrectionDisabled().focused($focused).submitLabel(.next).onSubmit(continueToOptions)
                 .accessibilityLabel("Media link")
-            Divider()
-            HStack(spacing: 12) {
-                inputStatus.font(.caption)
-                Spacer(minLength: 0)
-                if !link.isEmpty {
-                    Button {
-                        link = ""
-                        focused = true
-                    } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                            .frame(width: 44, height: 44)
-                    }.buttonStyle(.plain).accessibilityLabel("Clear link")
+            inputStatus.font(.caption)
+            if let site = socialSite {
+                Divider()
+                Text(
+                    "Copy the full Reddit post URL from your browser’s address bar, not the Reddit app. Use a link containing /comments/."
+                )
+                .font(.caption).foregroundStyle(.secondary)
+                .accessibilityIdentifier("reddit-browser-link-note")
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(site.name + " access").font(.subheadline.weight(.medium))
+                        Text(
+                            socialAccess.cookieCounts[site, default: 0] > 0
+                                ? "Cookies saved" : "Sign in if this link requires an account"
+                        )
+                        .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Button(socialAccess.cookieCounts[site, default: 0] > 0 ? "Reconnect" : "Connect") {
+                        focused = false
+                        loginSite = site
+                    }.buttonStyle(.bordered)
                 }
-                CohesivePasteButton { value in
-                    link = value.trimmingCharacters(in: .whitespacesAndNewlines)
-                    focused = false
-                }.frame(width: 44, height: 44)
             }
         }.modifier(MediaCardStyle(padding: 20))
+    }
+    private var clearLinkButton: some View {
+        Button {
+            link = ""
+            focused = true
+        } label: {
+            Text("CLEAR LINK")
+                .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                .tracking(1.8).frame(maxWidth: .infinity, minHeight: 28)
+        }
+        .wrathGlassButton(clear: true).buttonBorderShape(.capsule).controlSize(.large)
+        .foregroundStyle(.primary).accessibilityLabel("Clear link")
     }
     @ViewBuilder private var inputStatus: some View {
         if sourceReady {
@@ -195,7 +234,7 @@ struct AddLinkSheet: View {
     }
     private func add() {
         guard canDownload, let url = validURL else { return }
-        store.add(url, availability: availability)
+        guard store.add(url, availability: availability) else { return }
         added()
         dismiss()
     }

@@ -4,6 +4,7 @@ import WrathCore
 struct LinkInspectionRequest: Hashable {
     let url: URL?
     let revision: Int
+    let accessRevision: UUID?
 }
 
 extension LinkInspector {

@@ -26,27 +26,6 @@ public struct Quality: RawRepresentable, Codable, Hashable, Sendable {
         try container.encode(rawValue)
     }
 }
-public struct MediaCookie: Codable, Sendable {
-    public let name: String
-    public let value: String
-    public let domain: String
-    public let path: String
-    public let secure: Bool
-    public let hostOnly: Bool
-    public let expires: Double?
-    public init(
-        name: String, value: String, domain: String, path: String = "/", secure: Bool = false, expires: Double? = nil,
-        hostOnly: Bool? = nil
-    ) {
-        self.name = name
-        self.value = value
-        self.domain = domain
-        self.path = path
-        self.secure = secure
-        self.hostOnly = hostOnly ?? !domain.hasPrefix(".")
-        self.expires = expires
-    }
-}
 public struct MediaTrack: Codable, Sendable {
     public let url: URL
     public let headers: [String: String]
@@ -54,10 +33,9 @@ public struct MediaTrack: Codable, Sendable {
     public let streaming: Bool
     public let bytes: Int64?
     public let chunkSize: Int64?
-    public let cookies: [MediaCookie]?
     public init(
         url: URL, headers: [String: String] = [:], role: String = "video", streaming: Bool = false, bytes: Int64? = nil,
-        chunkSize: Int64? = nil, cookies: [MediaCookie]? = nil
+        chunkSize: Int64? = nil
     ) {
         self.url = url
         self.headers = headers
@@ -65,7 +43,6 @@ public struct MediaTrack: Codable, Sendable {
         self.streaming = streaming
         self.bytes = bytes
         self.chunkSize = chunkSize
-        self.cookies = cookies
     }
 }
 public struct SubtitleCue: Codable, Sendable {
@@ -90,6 +67,7 @@ public struct MediaPlan: Codable, Sendable {
     public let sponsorSegments: [SponsorSegment]?
     public let subtitle: MediaSubtitle?
     public let subtitleWarning: String?
+    public let warnings: [String]?
 }
 public enum JobState: String, Codable, Sendable {
     case queued, resolving, downloading, processing, completed, failed, cancelled
@@ -142,8 +120,28 @@ public struct DownloadJob: Identifiable, Codable, Sendable {
 public enum LinkInput {
     public static func parse(_ text: String) -> URL? {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !value.isEmpty, !value.contains(where: { $0.isWhitespace }) else { return nil }
-        let normalized = value.contains("://") ? value : "https://" + value
+        guard !value.isEmpty else { return nil }
+        var candidate = value
+        if value.contains(where: { $0.isWhitespace }) {
+            // Social apps copy captions + a link (sometimes with trailing punctuation).
+            // Don't silently extract arbitrary URLs from an unrelated text message.
+            let regex = try! NSRegularExpression(pattern: #"https?://[^\s<>"']+"#, options: [.caseInsensitive])
+            let range = NSRange(value.startIndex..<value.endIndex, in: value)
+            let matches = regex.matches(in: value, range: range)
+            guard matches.count == 1, let match = matches.first,
+                let swiftRange = Range(match.range, in: value)
+            else { return nil }
+            candidate = String(value[swiftRange]).trimmingCharacters(
+                in: CharacterSet(charactersIn: ".,;!)]}”’"))
+            guard let sharedURL = URL(string: candidate),
+                SocialPlatform.forURL(sharedURL) != nil
+                    || ["youtube.com", "youtu.be", "youtube-nocookie.com"].contains(where: {
+                        let host = sharedURL.host?.lowercased() ?? ""
+                        return host == $0 || host.hasSuffix("." + $0)
+                    })
+            else { return nil }
+        }
+        let normalized = candidate.contains("://") ? candidate : "https://" + candidate
         guard let url = URL(string: normalized), ["https", "http"].contains(url.scheme?.lowercased() ?? ""),
             let host = url.host, !host.isEmpty, url.user == nil, url.password == nil
         else { return nil }

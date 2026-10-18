@@ -1,4 +1,4 @@
-"""Build and audit an unsigned iOS 27 IPA using Xcode on macOS or xtool on Linux."""
+"""Build and audit an unsigned modern or compatibility IPA using Xcode on macOS or xtool on Linux."""
 
 import argparse
 import platform
@@ -7,6 +7,7 @@ import subprocess
 from pathlib import Path
 
 from AppIcon import compile_icon
+from BuildVariant import MINIMUM_IOS, VARIANT
 from PackageIPA import package_app, package_ipa
 from Prepare import ROOT, prepare
 
@@ -30,6 +31,7 @@ def main():
     parser.add_argument('--require-adaptive-icon', action='store_true', help='Reject the PNG fallback')
     parser.add_argument('--build-directory', type=Path, default=ROOT / '.build/xcode')
     args = parser.parse_args()
+    print(f'Building {VARIANT}: iOS {MINIMUM_IOS}+', flush=True)
     native = platform.system() == 'Darwin' and not args.package_only
     require_icon = args.require_adaptive_icon or native
     icon_assets = args.icon_assets
@@ -52,7 +54,7 @@ def main():
     else:
         if not args.package_only:
             subprocess.run([
-                'xtool', 'dev', 'build', '-c', 'release', '--triple', 'arm64-apple-ios27.0', '--ipa'
+                'xtool', 'dev', 'build', '-c', 'release', '--triple', f'arm64-apple-ios{MINIMUM_IOS}', '--ipa'
             ], cwd=ROOT, check=True)
         package_ipa(ROOT / 'xtool/Wrath.ipa', output, icon_assets, require_icon)
 

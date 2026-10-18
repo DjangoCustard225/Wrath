@@ -11,17 +11,29 @@ final class OperationToken: @unchecked Sendable {
     let pointer = wrath_token_create()!
     var isCancelled: Bool { wrath_is_cancelled(pointer) != 0 }
     func cancel() { wrath_token_cancel(pointer) }
+    func setPaused(_ paused: Bool) { wrath_token_set_paused(pointer, paused ? 1 : 0) }
     deinit { wrath_token_free(pointer) }
+}
+
+struct DownloadEvent: Decodable, Sendable {
+    let type: String
+    let plan: MediaPlan?
+    let index: Int?
+    let bytes: Int64?
+    let total: Int64?
+    let speed: Double?
+    let eta: Double?
+    let finished: Bool?
 }
 
 final class MediaEngine: @unchecked Sendable {
     static let shared = MediaEngine()
-    // CPython's thread state stays on one dedicated thread, including across jobs.
+    // Inspections are serialized separately from long-running upstream downloads.
     private let condition = NSCondition()
     private var work: [() -> Void] = []
-    // FFmpeg may read an entire HLS stream. It must not occupy Python's
-    // dedicated thread while the user is inspecting another link.
+    // Local processing and metadata probing stay off the Python worker threads.
     private let processingQueue = DispatchQueue(label: "Wrath.MediaProcessing", qos: .utility)
+    private let downloadQueue = DispatchQueue(label: "Wrath.YtDlpDownload", qos: .utility)
     private let metadataQueue = DispatchQueue(label: "Wrath.LocalMediaInfo", qos: .utility)
     private lazy var thread: Thread = {
         let t = Thread { [self] in
@@ -63,30 +75,73 @@ final class MediaEngine: @unchecked Sendable {
             }
         }
     }
-    func extract(job: DownloadJob, cache: URL, token: OperationToken) async throws -> MediaPlan {
-        try await perform {
-            let options = try JSONSerialization.jsonObject(with: JSONEncoder().encode(job.effectiveOptions))
-            let request: [String: Any] = [
-                "url": job.sourceURL.absoluteString, "kind": job.kind.rawValue, "quality": job.quality.rawValue,
-                "cache": cache.path, "options": options,
-                "exactQuality": job.codecAvailability?.exactQualities ?? false,
-            ]
-            let data = try JSONSerialization.data(withJSONObject: request)
-            let raw = wrath_extract(
-                Bundle.main.bundlePath, cache.path, String(decoding: data, as: UTF8.self), token.pointer)
-            guard let raw else { throw EngineFailure(message: "The extraction engine returned no result.") }
-            defer { wrath_free(raw) }
-            struct Reply: Decodable {
-                let plan: MediaPlan?
-                let error: String?
+    func download(
+        job: DownloadJob, cache: URL, directory: URL, token: OperationToken,
+        event: @escaping @MainActor @Sendable (DownloadEvent) -> Void
+    ) async throws -> MediaPlan {
+        let social = try await SocialAccessStore.shared.snapshot(for: job.sourceURL)
+        let options = try JSONSerialization.jsonObject(with: JSONEncoder().encode(job.effectiveOptions))
+        let request: [String: Any] = [
+            "url": job.sourceURL.absoluteString, "kind": job.kind.rawValue, "quality": job.quality.rawValue,
+            "cache": cache.path, "directory": directory.path, "options": options,
+            "exactQuality": job.codecAvailability?.exactQualities ?? false,
+            "socialAccess": social,
+        ]
+        let data = try JSONSerialization.data(withJSONObject: request)
+        let payload = String(decoding: data, as: UTF8.self)
+        let (stream, continuation) = AsyncStream<DownloadEvent>.makeStream()
+        let consumer = Task {
+            for await value in stream { await event(value) }
+        }
+        do {
+            let plan = try await withTaskCancellationHandler {
+                try await dispatch(on: downloadQueue) {
+                    final class Reporter {
+                        let continuation: AsyncStream<DownloadEvent>.Continuation
+                        init(_ continuation: AsyncStream<DownloadEvent>.Continuation) {
+                            self.continuation = continuation
+                        }
+                    }
+                    let reporter = Reporter(continuation)
+                    let context = Unmanaged.passUnretained(reporter).toOpaque()
+                    guard !token.isCancelled else { throw CancellationError() }
+                    guard
+                        let raw = wrath_download(
+                            Bundle.main.bundlePath, payload, token.pointer,
+                            { json, context in
+                                guard let json, let context,
+                                    let value = try? JSONDecoder().decode(
+                                        DownloadEvent.self, from: Data(String(cString: json).utf8))
+                                else { return }
+                                Unmanaged<Reporter>.fromOpaque(context).takeUnretainedValue().continuation.yield(value)
+                            }, context)
+                    else { throw EngineFailure(message: "The download engine returned no result.") }
+                    defer { wrath_free(raw) }
+                    withExtendedLifetime(reporter) {}
+                    guard !token.isCancelled else { throw CancellationError() }
+                    struct Reply: Decodable {
+                        let plan: MediaPlan?
+                        let error: String?
+                    }
+                    let reply = try JSONDecoder().decode(Reply.self, from: Data(String(cString: raw).utf8))
+                    guard let plan = reply.plan else { throw EngineFailure(message: reply.error ?? "No media found.") }
+                    return plan
+                }
+            } onCancel: {
+                token.cancel()
             }
-            let reply = try JSONDecoder().decode(Reply.self, from: Data(String(cString: raw).utf8))
-            guard let plan = reply.plan else { throw EngineFailure(message: reply.error ?? "No media found.") }
+            continuation.finish()
+            await consumer.value
             return plan
+        } catch {
+            continuation.finish()
+            await consumer.value
+            throw error
         }
     }
     func inspect(url: URL, cache: URL, token: OperationToken) async throws -> CodecAvailability {
-        try await withTaskCancellationHandler {
+        let social = try await SocialAccessStore.shared.snapshot(for: url)
+        return try await withTaskCancellationHandler {
             try await perform {
                 // A cancelled inspection may have waited behind extraction or
                 // remux work. Drop it before entering the embedded interpreter.
@@ -94,6 +149,7 @@ final class MediaEngine: @unchecked Sendable {
                 let request: [String: Any] = [
                     "url": url.absoluteString, "kind": "video", "quality": 0,
                     "cache": cache.path, "operation": "inspect",
+                    "socialAccess": social,
                 ]
                 let data = try JSONSerialization.data(withJSONObject: request)
                 guard
@@ -119,9 +175,23 @@ final class MediaEngine: @unchecked Sendable {
         }
     }
     func clearExtractorCache(in support: URL) async throws {
-        // Serialize with inspections/extractions so cached files are never
-        // removed while the interpreter is reading or writing them.
+        // Wait for downloading, then serialize cache removal with inspections.
+        try await dispatch(on: downloadQueue) {}
         try await perform {
+            let token = OperationToken()
+            guard
+                let raw = wrath_extract(
+                    Bundle.main.bundlePath, support.path, #"{"operation":"clearInspectionCache"}"#, token.pointer)
+            else { throw EngineFailure(message: "Could not clear checked media details.") }
+            defer { wrath_free(raw) }
+            struct Reply: Decodable {
+                let cleared: Bool?
+                let error: String?
+            }
+            let reply = try JSONDecoder().decode(Reply.self, from: Data(String(cString: raw).utf8))
+            guard reply.cleared == true else {
+                throw EngineFailure(message: reply.error ?? "Could not clear checked media details.")
+            }
             try CacheMaintenance.clearExtractor(in: support)
         }
     }

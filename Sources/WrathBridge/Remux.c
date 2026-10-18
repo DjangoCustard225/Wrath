@@ -98,7 +98,7 @@ int wrath_remux_with_status(const char *first, const char *first_headers, const 
     int included[2]={0};
     for(int p=0;p<2;p++) {
         if(!paths[p] || !paths[p][0]) continue;
-        if(wrath_is_cancelled(token)) { result=AVERROR_EXIT; goto done; }
+        if(wrath_wait_if_paused(token)) { result=AVERROR_EXIT; goto done; }
         // One demuxer per input, including progressive/HLS files with both tracks.
         // This avoids fetching the same HLS segments once for video and again for audio.
         Input *in=&inputs[count];
@@ -216,7 +216,7 @@ int wrath_remux_with_status(const char *first, const char *first_headers, const 
     if(status) status(4,duration>0 ? 0 : -1,context);
     int packets_written=0;
     for(;;) {
-        if(wrath_is_cancelled(token)) { result=AVERROR_EXIT; goto done; }
+        if(wrath_wait_if_paused(token)) { result=AVERROR_EXIT; goto done; }
         int selected=-1;
         for(int i=0;i<count;i++) {
             Input *in=&inputs[i];

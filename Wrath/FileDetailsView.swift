@@ -82,7 +82,7 @@ struct FileDetailsView: View {
                 }
             }.padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 32)
         }
-        .scrollEdgeEffectStyle(.soft, for: .all)
+        .wrathSoftScrollEdges()
         .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
         .navigationTitle("File details").navigationBarTitleDisplayMode(.inline)
         .toolbar(.visible, for: .navigationBar)
@@ -154,7 +154,7 @@ struct FileDetailsView: View {
                     } else {
                         Text("Additional media details are unavailable.").font(.subheadline).foregroundStyle(.secondary)
                         Button("Read details again", systemImage: "arrow.clockwise") { Task { await loadDetails() } }
-                            .buttonStyle(.glass)
+                            .wrathGlassButton()
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading).modifier(
                     MediaCardStyle(padding: 16, cornerRadius: 18))
@@ -203,7 +203,7 @@ struct RenameFileSheet: View {
                     }
                 }
             }.navigationTitle("Rename file").navigationBarTitleDisplayMode(.inline)
-                .scrollEdgeEffectHidden(focused, for: .bottom)
+                .wrathHideBottomEdge(focused)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() }.disabled(saving) }
                     ToolbarItem(placement: .confirmationAction) {

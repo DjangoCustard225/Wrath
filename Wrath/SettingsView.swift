@@ -17,6 +17,11 @@ struct SettingsView: View {
                 }
                 Section {
                     NavigationLink {
+                        SocialAccessSettingsView()
+                    } label: {
+                        Label("Cookies", systemImage: "person.crop.circle.badge.checkmark")
+                    }
+                    NavigationLink {
                         StorageSettingsView(store: store)
                     } label: {
                         HStack {
@@ -48,7 +53,6 @@ struct SettingsView: View {
 private struct StorageSettingsView: View {
     @Bindable var store: DownloadStore
     @State private var confirmingCacheClear = false
-    private var historyCount: Int { store.queue.filter { [.failed, .cancelled].contains($0.job.state) }.count }
     var body: some View {
         Form {
             Section {
@@ -80,19 +84,6 @@ private struct StorageSettingsView: View {
             } footer: {
                 Text("Keeps saved files and active downloads.")
             }
-            if historyCount > 0 {
-                Section("Download history") {
-                    Button {
-                        store.clearFinishedQueue()
-                    } label: {
-                        HStack {
-                            Text("Clear failed & cancelled entries")
-                            Spacer()
-                            Text("\(historyCount)").foregroundStyle(.secondary).monospacedDigit()
-                        }
-                    }
-                }
-            }
         }.navigationTitle("Storage").navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -122,6 +113,10 @@ private struct AboutSettingsView: View {
         Form {
             Section {
                 LabeledContent("Version", value: AppVersion.full)
+                LabeledContent(
+                    "Build",
+                    value: Bundle.main.infoDictionary?["WrathBuildVariant"] as? String == "compatibility"
+                        ? "Compatibility · iOS 17+" : "Modern · iOS 26+")
                 NavigationLink("Download help") { DownloadHelpView() }
             }
             Section("Components") {
@@ -144,14 +139,12 @@ private struct DownloadHelpView: View {
                     "Choose quality, codecs, thumbnails, and subtitles when adding a link. Wrath remembers your choices and adjusts them to the available tracks."
                 )
             }
-            Section("Queue") {
-                Text(
-                    "Downloads run one at a time. Pause after current lets the active download finish before pausing the queue."
-                )
+            Section("Downloads") {
+                Text("Wrath downloads one link at a time. Add another after the current download finishes.")
             }
             Section("Background downloads") {
                 Text(
-                    "Keep Wrath open for long downloads. iOS limits background time; if a download is interrupted, open it in Downloads and retry."
+                    "Keep Wrath open for long downloads. iOS limits background time; if a download is interrupted, add its link again to retry."
                 )
             }
             Section("Saved files") {

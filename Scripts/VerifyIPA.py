@@ -6,6 +6,8 @@ import plistlib
 import struct
 import zipfile
 
+from BuildVariant import MINIMUM_IOS, VARIANT
+
 ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -23,6 +25,7 @@ def macho(data):
     assert cpu == 0x100000c, f'Unexpected CPU: {cpu:x}'
     offset = 32
     dependencies, rpaths = [], []
+    minimum = None
     for _ in range(count):
         command, size = struct.unpack_from('<II', data, offset)
         if command in (0xc, 0x80000018, 0x8000001f):
@@ -31,18 +34,25 @@ def macho(data):
         elif command == 0x8000001c:
             start = struct.unpack_from('<I', data, offset + 8)[0]
             rpaths.append(data[offset + start:offset + size].split(b'\0')[0].decode())
+        elif command in (0x32, 0x25):
+            version = struct.unpack_from('<I', data, offset + (12 if command == 0x32 else 8))[0]
+            minimum = (version >> 16, (version >> 8) & 255, version & 255)
         offset += size
-    return dependencies, rpaths
+    return dependencies, rpaths, minimum
 
 
 def verify(path, require_adaptive_icon=False):
+    from VerifyYtDlp import verify_ipa
+    verify_ipa(path)
     with zipfile.ZipFile(path) as archive:
         names = set(archive.namelist())
         base = 'Payload/Wrath.app/'
         info = plistlib.loads(archive.read(base + 'Info.plist'))
         assert info['CFBundleDisplayName'] == 'Wrath'
         assert info['CFBundleIdentifier'] == 'app.wrath.downloader'
-        assert info['MinimumOSVersion'] == '27.0'
+        assert info['MinimumOSVersion'] == MINIMUM_IOS
+        assert info['WrathBuildVariant'] == VARIANT
+        supported = tuple(map(int, MINIMUM_IOS.split('.'))) + (0,)
         assert info['CADisableMinimumFrameDurationOnPhone']
         assert info['UIFileSharingEnabled']
         icon = archive.read(base + 'AppIcon.png')
@@ -52,6 +62,8 @@ def verify(path, require_adaptive_icon=False):
         adaptive_icon = 'WrathAdaptiveIconSource' in info
         assert not require_adaptive_icon or adaptive_icon, 'Native adaptive icon required'
         if adaptive_icon:
+            legacy = [n for n in names if n.startswith(base + 'AppIcon') and n.endswith('.png') and n != base + 'AppIcon.png']
+            assert legacy, 'Missing generated legacy app icon renditions'
             from AppIcon import source_hash
             assert info['WrathAdaptiveIconSource'] == source_hash(), 'Stale adaptive icon'
             assert archive.read(base + 'Assets.car').startswith(b'BOMStore')
@@ -74,7 +86,8 @@ def verify(path, require_adaptive_icon=False):
                 assert binary in names, binary
                 binaries.append(binary); frameworks.append(binary)
         for binary in binaries:
-            dependencies, rpaths = macho(archive.read(binary))
+            dependencies, rpaths, minimum = macho(archive.read(binary))
+            assert minimum is not None and minimum <= supported, f'{binary}: minimum OS {minimum} exceeds {supported}'
             for dependency in dependencies:
                 if dependency.startswith('@rpath/'):
                     relative = dependency.removeprefix('@rpath/')
@@ -89,7 +102,7 @@ def verify(path, require_adaptive_icon=False):
             assert archive.read(binary + '.origin').decode().strip() == placeholder.removeprefix(base)
         assert any(n.startswith(base + 'Licenses/') for n in names)
         print(json.dumps(dict(app=info['CFBundleDisplayName'], minimumIOS=info['MinimumOSVersion'],
-                              adaptiveIcon=adaptive_icon,
+                              adaptiveIcon=adaptive_icon, variant=VARIANT,
                               frameworks=len(frameworks), pythonExtensions=len(placeholders),
                               compressedMiB=round(Path(path).stat().st_size / 1024**2, 1), status='passed'), indent=2))
 

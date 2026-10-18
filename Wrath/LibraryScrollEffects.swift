@@ -28,7 +28,7 @@ struct LibraryListScrollView<Content: View>: View {
 
     init(@ViewBuilder content: () -> Content) { self.content = content() }
 
-    var body: some View {
+    private var scrollContent: some View {
         ScrollView {
             LazyVStack(alignment: .leading, spacing: 20) { content }
                 .padding(.horizontal, 20)
@@ -37,29 +37,37 @@ struct LibraryListScrollView<Content: View>: View {
                 .environment(\.libraryScrollEffectsEnabled, hasStartedScrolling && !isAnimatingScroll)
                 .environment(\.libraryScrollAtTop, isAtTop)
         }
-        .onScrollGeometryChange(for: Bool.self) { geometry in
-            geometry.contentOffset.y + geometry.contentInsets.top <= 1
-        } action: { _, atTop in
-            isAtTop = atTop
-            if !atTop, isUserScrolling { hasStartedScrolling = true }
+    }
+
+    @ViewBuilder private var trackedScroll: some View {
+        if #available(iOS 18, *) {
+            scrollContent.onScrollGeometryChange(for: Bool.self) { geometry in
+                geometry.contentOffset.y + geometry.contentInsets.top <= 1
+            } action: { _, atTop in
+                isAtTop = atTop
+                if !atTop, isUserScrolling { hasStartedScrolling = true }
+            }
+            .onScrollPhaseChange { _, phase in
+                let animating = phase == .animating
+                let userScrolling = phase == .interacting || phase == .decelerating
+                let started = !animating && (hasStartedScrolling || userScrolling)
+                guard
+                    hasStartedScrolling != started || isAnimatingScroll != animating || isUserScrolling != userScrolling
+                else { return }
+                hasStartedScrolling = started
+                isAnimatingScroll = animating
+                isUserScrolling = userScrolling
+            }
+        } else {
+            scrollContent
         }
-        .onScrollPhaseChange { _, phase in
-            let animating = phase == .animating
-            let userScrolling = phase == .interacting || phase == .decelerating
-            let started = !animating && (hasStartedScrolling || userScrolling)
-            guard hasStartedScrolling != started || isAnimatingScroll != animating || isUserScrolling != userScrolling
-            else { return }
-            hasStartedScrolling = started
-            isAnimatingScroll = animating
-            isUserScrolling = userScrolling
-        }
-        .contentMargins(.bottom, 48, for: .scrollContent)
-        .scrollEdgeEffectStyle(.soft, for: [.top, .bottom])
-        .scrollEdgeEffectHidden(false, for: [.top, .bottom])
-        .toolbarMinimizationBehavior(isAtTop ? .never : .onScrollDown, for: .navigationBar)
-        .toolbarMinimizationRestoration(.atScrollEdge, for: .navigationBar)
-        .toolbarMinimizationSafeAreaAdjustment(.disabled, for: .navigationBar)
-        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
+    }
+
+    var body: some View {
+        trackedScroll.contentMargins(.bottom, 48, for: .scrollContent)
+            .wrathSoftScrollEdges()
+            .wrathLibraryToolbar(atTop: isAtTop)
+            .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
     }
 }
 

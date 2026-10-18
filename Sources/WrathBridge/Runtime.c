@@ -1,10 +1,8 @@
 #include "WrathBridge.h"
 #ifdef __APPLE__
 #include <Python/Python.h>
-#include <JavaScriptCore/JavaScriptCore.h>
 #else
 #include <Python.h>
-#include <JavaScriptCore/JavaScript.h>
 #endif
 #include <stdlib.h>
 #include <string.h>
@@ -12,39 +10,63 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <pthread.h>
 
-static _Thread_local WrathToken *current_token;
-extern int wrath_is_cancelled(WrathToken *);
+typedef struct {
+    WrathToken *token;
+    WrathEvent callback;
+    void *context;
+} RuntimeOperation;
+static _Thread_local RuntimeOperation *current_operation;
+static pthread_mutex_t initialization_lock = PTHREAD_MUTEX_INITIALIZER;
 
-static char *js_string(JSContextRef ctx, JSValueRef value) {
-    JSStringRef string = JSValueToStringCopy(ctx, value, NULL);
-    size_t size = JSStringGetMaximumUTF8CStringSize(string);
-    char *result = malloc(size);
-    JSStringGetUTF8CString(string, result, size); JSStringRelease(string);
-    return result;
+static RuntimeOperation *operation_from(PyObject *capsule) {
+    if(!capsule || capsule == Py_None) return current_operation;
+    return PyCapsule_GetPointer(capsule, "WrathOperation");
 }
-static PyObject *evaluate(PyObject *self, PyObject *args) {
-    const char *script;
-    if (!PyArg_ParseTuple(args, "s", &script)) return NULL;
-    JSGlobalContextRef ctx = JSGlobalContextCreate(NULL);
-    // Capture the solver's synchronous console output without a web view or process.
-    JSStringRef pre = JSStringCreateWithUTF8CString("var __wrath_output=''; var console={log:function(x){__wrath_output=String(x)},warn:function(){},error:function(){}};");
-    JSEvaluateScript(ctx, pre, NULL, NULL, 1, NULL); JSStringRelease(pre);
-    JSStringRef source = JSStringCreateWithUTF8CString(script);
-    JSValueRef exception = NULL;
-    JSEvaluateScript(ctx, source, NULL, NULL, 1, &exception); JSStringRelease(source);
-    PyObject *result;
-    if (exception) {
-        char *message = js_string(ctx, exception); PyErr_SetString(PyExc_RuntimeError, message); free(message); result = NULL;
-    } else {
-        JSStringRef key = JSStringCreateWithUTF8CString("__wrath_output");
-        JSValueRef value = JSObjectGetProperty(ctx, JSContextGetGlobalObject(ctx), key, NULL);
-        char *output = js_string(ctx, value); result = PyUnicode_FromString(output); free(output); JSStringRelease(key);
+static PyObject *operation_context(PyObject *self, PyObject *args) {
+    if(!current_operation) Py_RETURN_NONE;
+    return PyCapsule_New(current_operation, "WrathOperation", NULL);
+}
+static PyObject *cancelled(PyObject *self, PyObject *args) {
+    PyObject *capsule=Py_None;
+    if(!PyArg_ParseTuple(args,"|O",&capsule)) return NULL;
+    RuntimeOperation *operation=operation_from(capsule);
+    if(PyErr_Occurred()) return NULL;
+    return PyBool_FromLong(operation && wrath_is_cancelled(operation->token));
+}
+static PyObject *checkpoint(PyObject *self, PyObject *args) {
+    PyObject *capsule=Py_None;
+    if(!PyArg_ParseTuple(args,"|O",&capsule)) return NULL;
+    RuntimeOperation *operation=operation_from(capsule);
+    if(PyErr_Occurred()) return NULL;
+    int stopped=0;
+    // A paused transfer must not hold the GIL and starve link inspections.
+    Py_BEGIN_ALLOW_THREADS
+    if(operation) stopped=wrath_wait_if_paused(operation->token);
+    Py_END_ALLOW_THREADS
+    return PyBool_FromLong(stopped);
+}
+static PyObject *report(PyObject *self, PyObject *args) {
+    PyObject *capsule;
+    const char *json;
+    if(!PyArg_ParseTuple(args,"Os",&capsule,&json)) return NULL;
+    RuntimeOperation *operation=operation_from(capsule);
+    if(PyErr_Occurred()) return NULL;
+    if(operation && operation->callback) {
+        Py_BEGIN_ALLOW_THREADS
+        operation->callback(json,operation->context);
+        Py_END_ALLOW_THREADS
     }
-    JSGlobalContextRelease(ctx); return result;
+    Py_RETURN_NONE;
 }
-static PyObject *cancelled(PyObject *s, PyObject *args) { return PyBool_FromLong(wrath_is_cancelled(current_token)); }
-static PyMethodDef methods[] = {{"evaluate", evaluate, METH_VARARGS, "Evaluate bundled solver in JavaScriptCore"}, {"cancelled", cancelled, METH_NOARGS, "Check cancellation"}, {NULL,NULL,0,NULL}};
+static PyMethodDef methods[] = {
+    {"context",operation_context,METH_NOARGS,"Capture this operation for downloader hooks"},
+    {"cancelled",cancelled,METH_VARARGS,"Check operation cancellation"},
+    {"checkpoint",checkpoint,METH_VARARGS,"Wait while paused without holding the GIL"},
+    {"report",report,METH_VARARGS,"Send structured progress to the native UI"},
+    {NULL,NULL,0,NULL}
+};
 static struct PyModuleDef module = {PyModuleDef_HEAD_INIT, "wrath_native", NULL, -1, methods};
 static PyObject *PyInit_wrath_native(void) { return PyModule_Create(&module); }
 static int initialized;
@@ -144,6 +166,7 @@ config_failed:
     }
     PyConfig_Clear(&config);
     initialized=1;
+    PyEval_SaveThread();
     return NULL;
 preinit_failed:
     return error_json(status.err_msg ? status.err_msg : "Python pre-initialization failed.");
@@ -158,18 +181,37 @@ static char *failure(const char *message) {
     char *result=error_json(combined);
     Py_XDECREF(description); Py_XDECREF(exception); PyErr_Clear(); return result;
 }
-char *wrath_extract(const char *root, const char *cache, const char *request, WrathToken *token) {
-    // Called exclusively by one serial worker queue for the interpreter's lifetime.
-    current_token = token;
-    if (!initialized) {
-        char *error=initialize(root);
-        if(error) { current_token=NULL; return error; }
+static char *invoke_worker(const char *root,const char *request,WrathToken *token,
+                           const char *method,WrathEvent callback,void *context) {
+    pthread_mutex_lock(&initialization_lock);
+    char *error=NULL;
+    if(!initialized) error=initialize(root);
+    pthread_mutex_unlock(&initialization_lock);
+    if(error) return error;
+    PyGILState_STATE gil=PyGILState_Ensure();
+    RuntimeOperation operation={token,callback,context};
+    current_operation=&operation;
+    char *result=NULL;
+    PyObject *worker=PyImport_ImportModule("wrath_worker");
+    if(!worker) {
+        result=failure("Could not load the bundled extraction engine");
+    } else {
+        PyObject *out=PyObject_CallMethod(worker,method,"s",request);
+        Py_DECREF(worker);
+        if(!out) result=failure("The extraction engine stopped unexpectedly");
+        else {
+            const char *utf8=PyUnicode_AsUTF8(out);
+            result=utf8 ? strdup(utf8) : failure("Invalid extraction result.");
+            Py_DECREF(out);
+        }
     }
-    PyObject *worker = PyImport_ImportModule("wrath_worker");
-    if (!worker) { current_token=NULL; return failure("Could not load the bundled extraction engine"); }
-    PyObject *out = PyObject_CallMethod(worker,"extract","s",request); Py_DECREF(worker);
-    if (!out) { current_token=NULL; return failure("The extraction engine stopped unexpectedly"); }
-    const char *utf8 = PyUnicode_AsUTF8(out);
-    char *result = utf8 ? strdup(utf8) : failure("Invalid extraction result."); Py_DECREF(out);
-    current_token=NULL; return result;
+    current_operation=NULL;
+    PyGILState_Release(gil);
+    return result;
+}
+char *wrath_extract(const char *root,const char *cache,const char *request,WrathToken *token) {
+    return invoke_worker(root,request,token,"extract",NULL,NULL);
+}
+char *wrath_download(const char *root,const char *request,WrathToken *token,WrathEvent callback,void *context) {
+    return invoke_worker(root,request,token,"download",callback,context);
 }

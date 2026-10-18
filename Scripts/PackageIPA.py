@@ -7,6 +7,7 @@ import zipfile
 from pathlib import Path
 
 from AppIcon import install_icon
+from BuildVariant import VARIANT
 from Prepare import ROOT
 from VerifyIPA import verify
 
@@ -57,6 +58,8 @@ def install_python(app):
 def package_staging(staging, output, icon_assets=None, require_adaptive_icon=False):
     app = staging / 'Payload/Wrath.app'
     info = plistlib.loads((app / 'Info.plist').read_bytes())
+    info['WrathBuildVariant'] = VARIANT
+    (app / 'Info.plist').write_bytes(plistlib.dumps(info))
     if info.get('CFBundleExecutable') != 'Wrath' or not (app / 'Wrath').is_file():
         raise RuntimeError('Expected the Wrath executable used by the embedded Python runtime.')
     if icon_assets:

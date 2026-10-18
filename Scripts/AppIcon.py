@@ -13,6 +13,8 @@ import plistlib
 import shutil
 import subprocess
 
+from BuildVariant import MINIMUM_IOS, VARIANT
+
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'AppIcon.icon'
 
@@ -79,18 +81,21 @@ def compile_icon(output):
     subprocess.run(['xcrun', 'actool', str(SOURCE), '--compile', str(bundle),
                     '--app-icon', 'AppIcon', '--platform', 'iphoneos',
                     '--target-device', 'iphone', '--target-device', 'ipad',
-                    '--minimum-deployment-target', '27.0',
+                    '--minimum-deployment-target', MINIMUM_IOS,
                     '--bundle-identifier', 'app.wrath.downloader',
                     '--output-partial-info-plist', str(output / 'IconInfo.plist'),
                     '--output-format', 'human-readable-text', '--warnings', '--errors'], check=True)
     if not (bundle / 'Assets.car').is_file():
         raise RuntimeError('actool did not produce Assets.car')
+    (output / 'Variant.txt').write_text(VARIANT + '\n')
     (output / 'Source.sha256').write_text(source_hash() + '\n')
     print(f'Compiled adaptive icon: {output}')
 
 
 def install_icon(app, assets):
     assets = Path(assets)
+    if (assets / 'Variant.txt').read_text().strip() != VARIANT:
+        raise RuntimeError('Icon assets were compiled for a different build variant.')
     if (assets / 'Source.sha256').read_text().strip() != source_hash():
         raise RuntimeError('Compiled icon is stale; recompile AppIcon.icon with actool.')
     catalog = assets / 'Bundle/Assets.car'

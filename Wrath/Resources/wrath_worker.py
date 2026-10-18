@@ -1,4 +1,4 @@
-"""Bundled extraction only. Swift owns transfers; libavformat owns remuxing."""
+"""Upstream yt-dlp extraction and downloads; native FFmpeg handles local processing."""
 import json
 import os
 import sys
@@ -10,6 +10,9 @@ import math
 import ssl
 import re
 import html
+import io
+import copy
+from pathlib import Path
 
 import certifi
 import yt_dlp
@@ -19,46 +22,65 @@ try:
 except ImportError:  # Allows host-side integration tests.
     wrath_native = None
 
-if wrath_native:
-    from yt_dlp.extractor.youtube.jsc._builtin.ejs import EJSBaseJCP
-    from yt_dlp.extractor.youtube.jsc.provider import register_provider, register_preference
-
-    @register_provider
-    class WrathJCP(EJSBaseJCP):
-        JS_RUNTIME_NAME = 'JavaScriptCore'
-
-        def is_available(self):
-            return self._available
-
-        def _run_js_runtime(self, stdin):
-            check_cancelled()
-            return wrath_native.evaluate(stdin)
-
-    @register_preference(WrathJCP)
-    def prefer_wrath(provider, requests):
-        return 1000
+class DownloadCancelled(BaseException):
+    """Leave upstream retry loops immediately without changing downloader code."""
 
 
-def check_cancelled():
-    if wrath_native and wrath_native.cancelled():
-        raise RuntimeError('Cancelled')
+def check_cancelled(context=None):
+    if wrath_native and wrath_native.cancelled(context):
+        raise DownloadCancelled()
+
+
+def checkpoint(context):
+    if wrath_native and wrath_native.checkpoint(context):
+        raise DownloadCancelled()
+
+
+def safe_message(message):
+    # Upstream warnings may contain signed URLs; never forward those to the UI.
+    return re.sub(r'https?://[^\s<>]+', '[link]', str(message)).removeprefix('ERROR: ').replace('\r', '').strip()[:1200]
+
+
+def report(context, event):
+    if wrath_native:
+        wrath_native.report(context, json.dumps(event, allow_nan=False))
 
 
 class QuietLogger:
+    def __init__(self, context=None):
+        self.context = context
+        self.warnings = []
+        self.errors = []
+
     def debug(self, message):
-        check_cancelled()
+        check_cancelled(self.context)
 
     def warning(self, message):
-        check_cancelled()
+        check_cancelled(self.context)
+        if re.match(r'^\[youtube\]\s+No supported JavaScript runtime could be found\.', str(message), re.I):
+            return
+        message = safe_message(message)
+        if message not in self.warnings and len(self.warnings) < 4:
+            self.warnings.append(message)
 
     def error(self, message):
-        check_cancelled()
+        check_cancelled(self.context)
+        message = safe_message(message)
+        if message and message not in self.errors and len(self.errors) < 4:
+            self.errors.append(message)
+
+
+def require_info(info, logger):
+    if isinstance(info, dict):
+        return info
+    if logger.errors:
+        raise ValueError(logger.errors[-1])
+    raise ValueError('yt-dlp did not return media information for this link.')
 
 
 class InspectionYoutubeDL(yt_dlp.YoutubeDL):
+    # Presentation only: the app renders the same structured -F catalog.
     def list_formats(self, info_dict):
-        # The app reads the structured -F catalog returned by extract_info.
-        # Avoid rendering its terminal table into the iOS console as well.
         check_cancelled()
 
     def list_subtitles(self, video_id, subtitles, name='subtitles'):
@@ -72,10 +94,10 @@ def selector(kind, height, video_codec='automatic', audio_codec='automatic', exa
     vf = f'[vcodec~="{video_patterns[video_codec]}"]' if video_codec in video_patterns else ''
     af = f'[acodec~="{audio_patterns[audio_codec]}"]' if audio_codec in audio_patterns else ''
     if kind == 'audio':
-        return f'ba{af}[protocol^=http]/ba{af}[protocol^=m3u8]/b{af}[protocol^=http]/b{af}[protocol^=m3u8]'
-    direct = '[protocol^=http]'
-    return (f'bv{cap}{vf}{direct}+ba{af}{direct}/'
-            f'b{cap}{vf}{af}{direct}/b{cap}{vf}{af}[protocol^=m3u8]')
+        return f'ba{af}/b{af}'
+    # The standard best-video expression, constrained only by user selections.
+    video_audio_filter = f'[acodec~="^(none|{audio_patterns[audio_codec][1:]})"]' if af else ''
+    return f'bv*{cap}{vf}{video_audio_filter}+ba{af}/b{cap}{vf}{af}'
 
 
 SPONSOR_CATEGORIES = ('sponsor', 'selfpromo', 'interaction', 'intro', 'outro', 'preview', 'music_offtopic', 'filler')
@@ -271,34 +293,28 @@ def download_subtitle(info, options, ydl):
 
 
 def make_plan(info, kind, ydl=None):
+    if not isinstance(info, dict):
+        raise ValueError('yt-dlp did not return media information for this link.')
     if info.get('_type') in ('playlist', 'multi_video') or info.get('entries') is not None:
         raise ValueError('Paste a link to one video. Playlist downloads are not supported yet.')
     if info.get('is_live'):
         raise ValueError('Live streams are not supported. Try again after the stream has ended.')
-    formats = info.get('requested_formats') or [info]
+    formats = [fmt for fmt in (info.get('requested_formats') or [info]) if isinstance(fmt, dict)]
     tracks = []
     for fmt in formats:
         url = fmt.get('url', '')
         if urllib.parse.urlparse(url).scheme not in ('https', 'http'):
             raise ValueError('This source did not provide a downloadable HTTP stream.')
         protocol = fmt.get('protocol') or 'https'
-        if protocol not in ('https', 'http', 'm3u8', 'm3u8_native'):
+        if protocol not in ('https', 'http', 'm3u8', 'm3u8_native', 'http_dash_segments', 'file'):
             raise ValueError('This stream format is not supported yet.')
         headers = {str(k): str(v) for k, v in (fmt.get('http_headers') or info.get('http_headers') or {}).items()
                    if '\r' not in str(k) + str(v) and '\n' not in str(k) + str(v)}
         tracks.append(dict(url=url, headers=headers,
                            role='audio' if fmt.get('vcodec') == 'none' else 'video',
                            streaming=protocol.startswith('m3u8'),
-                           bytes=fmt.get('filesize') or fmt.get('filesize_approx'),
+                           bytes=fmt.get('filesize'),
                            chunkSize=(fmt.get('downloader_options') or {}).get('http_chunk_size')))
-        if ydl is not None and info.get('extractor_key') == 'TikTok' and protocol in ('http', 'https'):
-            # URLSession needs the same cookies as yt-dlp's request handler.
-            # Preserve scope instead of forwarding an unscoped Cookie header.
-            cookies = [dict(name=c.name, value=c.value, domain=c.domain, path=c.path or '/',
-                            secure=c.secure, expires=c.expires, hostOnly=not c.domain_specified)
-                       for c in ydl.cookiejar.get_cookies_for_url(url)]
-            if cookies:
-                tracks[-1]['cookies'] = cookies
     if not tracks or len(tracks) > 2:
         raise ValueError('No compatible media tracks were found.')
     audio_codec = next((f.get('acodec', '') for f in formats if f.get('acodec') not in (None, 'none')), '')
@@ -337,181 +353,304 @@ def estimated_track_bytes(fmt, duration, audio_only=False):
     return None
 
 
+def supported_format(fmt):
+    if not isinstance(fmt, dict):
+        return False
+    from yt_dlp.downloader import get_suitable_downloader
+    from yt_dlp.downloader.http import HttpFD
+    from yt_dlp.downloader.hls import HlsFD
+    from yt_dlp.downloader.dash import DashSegmentsFD
+    return (urllib.parse.urlparse(fmt.get('url', '')).scheme in ('https', 'http')
+            and not fmt.get('has_drm')
+            and get_suitable_downloader(dict(fmt), {}) in (HttpFD, HlsFD, DashSegmentsFD))
+
+
+def selected_formats(info):
+    if not isinstance(info, dict):
+        raise ValueError('yt-dlp did not return media information for this link.')
+    formats = info.get('requested_formats')
+    return [fmt for fmt in formats if isinstance(fmt, dict)] if formats else [info]
+
+
 def codec_availability(info, ydl=None):
+    if not isinstance(info, dict):
+        raise ValueError('yt-dlp did not return media information for this link.')
     if info.get('_type') in ('playlist', 'multi_video') or info.get('entries') is not None:
         raise ValueError('Paste a link to one video. Playlist downloads are not supported yet.')
     if info.get('is_live'):
         raise ValueError('Live streams are not supported. Try again after the stream has ended.')
-    formats = [fmt for fmt in (info.get('formats') or [info])
-               if urllib.parse.urlparse(fmt.get('url', '')).scheme in ('https', 'http')
-               and fmt.get('protocol', 'https') in ('https', 'http', 'm3u8', 'm3u8_native')
-               and not fmt.get('has_drm')]
+    formats = [dict(fmt) for fmt in (info.get('formats') or [info]) if supported_format(fmt)]
     choices = []
     video_patterns = {'h264': ('avc1', 'h264'), 'hevc': ('hev1', 'hvc1', 'hevc', 'h265'),
                       'av1': ('av01', 'av1'), 'vp9': ('vp09', 'vp9')}
     audio_patterns = {'aac': ('mp4a', 'aac'), 'opus': ('opus',)}
-
-    def codec_matches(fmt, field, codec, patterns):
-        value = str(fmt.get(field) or '').lower()
-        # yt-dlp uses 'none' for an absent track and None for an unknown codec
-        # (common for direct media URLs). Unknown must still allow Automatic.
-        return value != 'none' if codec == 'automatic' else value.startswith(patterns[codec])
-
-    def http(fmt):
-        return str(fmt.get('protocol') or 'https').startswith('http')
-
-    def hls(fmt):
-        return str(fmt.get('protocol') or '').startswith('m3u8')
-
-    def at_height(fmt, height):
-        return not height or fmt.get('height') == height
-
-    def has_video(fmt):
-        return fmt.get('vcodec') != 'none'
-
-    def has_audio(fmt):
-        return fmt.get('acodec') != 'none'
-
-    video_candidates = ('automatic', *[c for c in video_patterns
-                                       if any(codec_matches(f, 'vcodec', c, video_patterns) for f in formats)])
-    audio_candidates = ('automatic', *[c for c in audio_patterns
-                                       if any(codec_matches(f, 'acodec', c, audio_patterns) for f in formats)])
-    has_any_audio = any(has_audio(f) for f in formats)
-
-    # Match the downloader's sorting once per media kind. Reading estimates
-    # requires no HEAD requests, media probes, or repeated selector evaluation.
-    owned_sorter = ydl is None
+    video_candidates = ('automatic', *[c for c, prefixes in video_patterns.items()
+                                       if any(str(f.get('vcodec') or '').startswith(prefixes) for f in formats)])
+    audio_candidates = ('automatic', *[c for c, prefixes in audio_patterns.items()
+                                       if any(str(f.get('acodec') or '').startswith(prefixes) for f in formats)])
+    heights = sorted({int(f['height']) for f in formats if f.get('vcodec') != 'none'
+                      and isinstance(f.get('height'), (int, float)) and math.isfinite(f['height'])
+                      and 0 < f['height'] <= 65536 and int(f['height']) == f['height']})
+    # Upstream has already sorted extracted formats. Select from the same in-memory
+    # catalog for each choice; no additional page, probe, or HEAD requests.
+    owned = ydl is None
     sorter = ydl or yt_dlp.YoutubeDL({'quiet': True, 'logger': QuietLogger()}, auto_init=False)
-    previous_sort = sorter.params.get('format_sort')
     try:
-        ordered = {}
+        sorter.sort_formats(dict(formats=formats, _format_sort_fields=info.get('_format_sort_fields')))
         for kind in ('video', 'audio'):
-            sorter.params['format_sort'] = ['res', 'vcodec:h264', 'acodec:aac'] if kind == 'video' else []
-            rows = [dict(f) for f in formats]
-            sorter.sort_formats(dict(formats=rows, _format_sort_fields=info.get('_format_sort_fields')))
-            ordered[kind] = rows
+            for height in ((0, *heights) if kind == 'video' else (0,)):
+                for video in (video_candidates if kind == 'video' else ('automatic',)):
+                    for audio in audio_candidates:
+                        check_cancelled()
+                        spec = selector(kind, height, video, audio, exact_height=True)
+                        selected = list(sorter.build_format_selector(spec)({
+                            'formats': formats, 'has_merged_format': any(f.get('vcodec') != 'none'
+                                                                      and f.get('acodec') != 'none' for f in formats),
+                            'incomplete_formats': all(f.get('vcodec') == 'none' for f in formats)
+                                                  or all(f.get('acodec') == 'none' for f in formats),
+                        }))
+                        if not selected:
+                            continue
+                        tracks = selected_formats(selected[0])
+                        if all(f.get('acodec' if kind == 'audio' else 'vcodec') == 'none' for f in tracks):
+                            continue
+                        sizes = [estimated_track_bytes(f, info.get('duration'), audio_only=kind == 'audio') for f in tracks]
+                        size = sum(sizes) if sizes and all(s is not None for s in sizes) else None
+                        choices.append(dict(kind=kind, quality=height, videoCodec=video, audioCodec=audio,
+                                            estimatedBytes=size if size is not None and 0 < size < 2**63 else None))
     finally:
-        sorter.params['format_sort'] = previous_sort
-        if owned_sorter:
+        if owned:
             sorter.close()
-
-    def best(kind, predicate):
-        return next((f for f in reversed(ordered[kind]) if predicate(f)), None)
-
-    def choice(kind, height, video, audio, tracks):
-        sizes = [estimated_track_bytes(f, info.get('duration'), audio_only=kind == 'audio') for f in tracks]
-        size = sum(sizes) if sizes and all(s is not None for s in sizes) else None
-        return dict(kind=kind, quality=height, videoCodec=video, audioCodec=audio,
-                    estimatedBytes=size if size is not None and 0 < size < 2**63 else None)
-
-    # -F already gives the complete format catalog. Determine supported choices
-    # from its codec, resolution, and protocol columns instead of running the
-    # format selector repeatedly for every possible combination.
-    available_heights = sorted({int(f['height']) for f in formats if has_video(f)
-                               and isinstance(f.get('height'), (int, float))
-                               and math.isfinite(f['height']) and 0 < f['height'] <= 65536
-                               and int(f['height']) == f['height']})
-    for height in (0, *available_heights):
-        check_cancelled()
-        for video in video_candidates:
-            for audio in audio_candidates:
-                video_track = best('video', lambda f: has_video(f) and not has_audio(f) and at_height(f, height) and http(f)
-                                   and codec_matches(f, 'vcodec', video, video_patterns))
-                audio_track = best('video', lambda f: has_audio(f) and not has_video(f) and http(f)
-                                   and codec_matches(f, 'acodec', audio, audio_patterns))
-                if video_track is not None and audio_track is not None:
-                    tracks = [video_track, audio_track]
-                else:
-                    tracks = []
-                    for protocol in (http, hls):
-                        progressive = best('video', lambda f: has_video(f) and (has_audio(f) or not has_any_audio)
-                                           and at_height(f, height) and protocol(f)
-                                           and codec_matches(f, 'vcodec', video, video_patterns)
-                                           and (codec_matches(f, 'acodec', audio, audio_patterns)
-                                                or (not has_any_audio and audio == 'automatic')))
-                        if progressive is not None:
-                            tracks = [progressive]
-                            break
-                if tracks:
-                    choices.append(choice('video', height, video, audio, tracks))
-
-    for audio in audio_candidates:
-        for only_audio, protocol in ((True, http), (True, hls), (False, http), (False, hls)):
-            track = best('audio', lambda f: has_audio(f) and (not has_video(f) if only_audio else has_video(f))
-                         and protocol(f) and codec_matches(f, 'acodec', audio, audio_patterns))
-            if track is not None:
-                choices.append(choice('audio', 0, 'automatic', audio, [track]))
-                break
-
-    heights = [f.get('height') for f in formats if has_video(f) and isinstance(f.get('height'), (int, float))]
     return dict(choices=choices, exactQualities=True, thumbnailAvailable=thumbnail_url(info) is not None,
-                thumbnail=thumbnail_url(info),
-                subtitles=[metadata for metadata, _ in subtitle_catalog(info)],
+                thumbnail=thumbnail_url(info), subtitles=[metadata for metadata, _ in subtitle_catalog(info)],
                 title=str(info.get('title') or info.get('id') or '')[:300],
                 author=str(info.get('uploader') or info.get('channel') or '')[:200],
-                duration=info.get('duration'), formatCount=len(formats),
-                maxHeight=int(max(heights)) if heights else None)
+                duration=info.get('duration'), formatCount=len(formats), maxHeight=max(heights) if heights else None)
 
 
-# TikTok rejects some of yt-dlp's randomly selected Chrome versions.
-# Keep inspection and media planning on the same verified browser identity.
-TIKTOK_USER_AGENT = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
-                     'AppleWebKit/537.36 (KHTML, like Gecko) '
-                     'Chrome/143.0.0.0 Safari/537.36')
-
-
-def is_tiktok_url(url):
-    if not isinstance(url, str):
-        return False
+def is_youtube_url(url):
     try:
-        host = urllib.parse.urlparse(url).hostname or ''
-    except ValueError:
+        host = (urllib.parse.urlparse(url).hostname or '').lower()
+    except (TypeError, ValueError):
         return False
-    return any(host == domain or host.endswith('.' + domain) for domain in ('tiktok.com', 'tiktokv.com'))
+    return any(host == domain or host.endswith('.' + domain)
+               for domain in ('youtube.com', 'youtu.be', 'youtube-nocookie.com'))
+
+
+# Keep social-site session cookies isolated from YouTube and other hosts.
+# No browser-wide cookie file or arbitrary Cookie HTTP header is accepted here.
+SOCIAL_DOMAINS = {'reddit': ('reddit.com', 'redd.it')}
+
+
+def domain_matches(host, domains):
+    return any(host == domain or host.endswith('.' + domain) for domain in domains)
+
+
+def social_cookie_jar(url, access):
+    invalid = 'Could not read saved social-media cookies. Reconnect your account or import a fresh cookies.txt file in Settings > Cookies.'
+    if not isinstance(access, dict):
+        raise ValueError(invalid)
+    if not access:
+        return []
+    platform = access.get('platform')
+    domains = SOCIAL_DOMAINS.get(platform) if isinstance(platform, str) else None
+    parsed = urllib.parse.urlparse(url)
+    host = (parsed.hostname or '').lower()
+    if parsed.scheme != 'https' or not domains or not domain_matches(host, domains):
+        # A caller cannot attach a stored social session to another website.
+        return []
+    text = access.get('cookies')
+    if text is None:
+        return []
+    if not isinstance(text, str) or len(text.encode('utf-8')) > 512 * 1024:
+        raise ValueError(invalid)
+    lines = text.removeprefix('\ufeff').replace('\r\n', '\n').replace('\r', '\n').split('\n')
+    if not lines or lines[0] not in ('# Netscape HTTP Cookie File', '# HTTP Cookie File'):
+        raise ValueError(invalid)
+    rows = []
+    for original in lines[1:]:
+        line = original.removeprefix('#HttpOnly_')
+        if not line or line.startswith('#'):
+            continue
+        fields = line.split('\t')
+        if len(fields) != 7:
+            raise ValueError(invalid)
+        domain = fields[0].lower()
+        cookie_host = domain.removeprefix('.')
+        if not domain_matches(cookie_host, domains):
+            # Even a manually constructed request cannot transfer credentials.
+            continue
+        if (fields[1] not in ('TRUE', 'FALSE') or fields[3] not in ('TRUE', 'FALSE')
+                or (fields[1] == 'TRUE') != domain.startswith('.')
+                or not fields[2].startswith('/') or not fields[5]
+                or not re.fullmatch(r'[0-9]{0,19}', fields[4])
+                or int(fields[4] or '0') > 2**63 - 1
+                or any(ord(c) < 32 or ord(c) >= 127 for field in fields for c in field)
+                or any(c in fields[5] for c in ' ;=') or ';' in fields[6]):
+            raise ValueError(invalid)
+        fields[0] = domain
+        fields[4] = fields[4] or '0'
+        rows.append(('#HttpOnly_' if original.startswith('#HttpOnly_') else '') + '\t'.join(fields))
+    from yt_dlp.cookies import YoutubeDLCookieJar
+    jar = YoutubeDLCookieJar()
+    try:
+        jar.load(io.StringIO('# Netscape HTTP Cookie File\n' + '\n'.join(rows) + '\n'), ignore_expires=True)
+    except Exception:
+        raise ValueError(invalid) from None
+    return [cookie for cookie in jar if not cookie.is_expired()]
+
+
+def user_error(error, url):
+    message = safe_message(error) or 'Unable to access this media.'
+    try:
+        host = (urllib.parse.urlparse(url).hostname or '').lower()
+    except (TypeError, ValueError):
+        return message
+    site = next((name for name, domains in SOCIAL_DOMAINS.items() if domain_matches(host, domains)), None)
+    if not site:
+        return message
+    if re.search(r'(?:log\s?in|sign\s?in|cookies|authentication|account required|private)', message, re.I):
+        return f'{site.title()} may require an authenticated session or access permission. Connect or reconnect {site.title()} in Settings > Cookies, then retry. ({message})'[:1200]
+    if re.search(r'(?:\b429\b|rate.?limit|too many requests)', message, re.I):
+        return f'{site.title()} is rate-limiting requests. Try again later. ({message})'[:1200]
+    if re.search(r'(?:\b403\b|forbidden|access denied|challenge|captcha)', message, re.I):
+        return f'{site.title()} denied access. Check that the link opens in your browser and reconnect your account if needed. ({message})'[:1200]
+    return message
+
+
+def request_options(data, logger):
+    options = data.get('options') or {}
+    inspecting = data.get('operation') == 'inspect'
+    # Start with CLI defaults: bare YoutubeDL({}) has different retry defaults.
+    result = copy.deepcopy(yt_dlp.parse_options(['--ignore-config']).ydl_opts)
+    result.update(noplaylist=True, quiet=True, logger=logger, cachedir=data['cache'],
+                  ca_certs=certifi.where(), listformats=inspecting,
+                  format=selector(data.get('kind', 'video'), int(data.get('quality', 0)),
+                                  options.get('videoCodec', 'automatic'), options.get('audioCodec', 'automatic'),
+                                  exact_height=bool(data.get('exactQuality'))))
+    if inspecting:
+        result['simulate'] = 'list_only'
+    cookies = []
+    if not is_youtube_url(data.get('url')):
+        social = data.get('socialAccess') or {}
+        cookies.extend(social_cookie_jar(data.get('url'), social))
+        if isinstance(social, dict):
+            domains = SOCIAL_DOMAINS.get(social.get('platform')) if isinstance(social.get('platform'), str) else None
+            parsed = urllib.parse.urlparse(data.get('url'))
+            host = (parsed.hostname or '').lower()
+            if parsed.scheme == 'https' and domains and domain_matches(host, domains):
+                agent = social.get('userAgent')
+                if agent is not None and (not isinstance(agent, str) or not agent or len(agent) > 1024
+                                          or any(ord(c) < 32 or ord(c) >= 127 for c in agent)):
+                    raise ValueError('The saved social-media User-Agent is invalid. Reset it in Settings.')
+                if agent:
+                    result['http_headers'] = {'User-Agent': agent}
+    return result, cookies
+
+
+def prepare_plan(info, data, ydl):
+    plan = make_plan(info, data['kind'], ydl)
+    options = data.get('options') or {}
+    if options.get('embedSubtitles') and data['kind'] == 'video':
+        try:
+            plan['subtitle'] = download_subtitle(info, options, ydl)
+        except Exception:
+            check_cancelled()
+            plan['subtitleWarning'] = 'Saved without subtitles: the selected track could not be downloaded or read.'
+    plan['sponsorSegments'] = sponsor_segments(info, options)
+    return plan
 
 
 def extract(request):
-    data = {}
     try:
         data = json.loads(request)
-        options = data.get('options') or {}
-        inspecting = data.get('operation') == 'inspect'
         check_cancelled()
-        ydl_options = dict(format='best' if inspecting else selector(data['kind'], int(data['quality']), options.get('videoCodec', 'automatic'), options.get('audioCodec', 'automatic'), exact_height=bool(data.get('exactQuality'))),
-                       noplaylist=True, quiet=True, no_warnings=True,
-                       logger=QuietLogger(), socket_timeout=20, retries=2,
-                       extractor_retries=2, cachedir=data['cache'],
-                       format_sort=['res', 'vcodec:h264', 'acodec:aac'] if data['kind'] == 'video' else [],
-                       ca_certs=certifi.where(), skip_download=True,
-                       remote_components=[], js_runtimes={},
-                       # Original captions are in the same extraction result as -F.
-                       # Avoid generating translations of uploaded YouTube captions.
-                       extractor_args={'youtube': {'skip': ['translated_subs']}},
-                       listformats=inspecting, simulate='list_only' if inspecting else False)
-        if is_tiktok_url(data.get('url')):
-            ydl_options['http_headers'] = {'User-Agent': TIKTOK_USER_AGENT}
-        with (InspectionYoutubeDL if inspecting else yt_dlp.YoutubeDL)(ydl_options) as ydl:
-            info = ydl.extract_info(data['url'], download=False)
+        if data.get('operation') == 'clearInspectionCache':
+            return json.dumps({'cleared': True})
+        logger = QuietLogger()
+        params, cookies = request_options(data, logger)
+        with (InspectionYoutubeDL if data.get('operation') == 'inspect' else yt_dlp.YoutubeDL)(params) as ydl:
+            for cookie in cookies:
+                ydl.cookiejar.set_cookie(cookie)
+            info = require_info(ydl.extract_info(data['url'], download=False), logger)
             check_cancelled()
-            if inspecting:
+            if data.get('operation') == 'inspect':
                 return json.dumps({'availability': codec_availability(info, ydl)})
-            plan = make_plan(info, data['kind'], ydl)
-            if options.get('embedSubtitles') and data['kind'] == 'video':
-                try:
-                    plan['subtitle'] = download_subtitle(info, options, ydl)
-                except Exception:
-                    check_cancelled()
-                    plan['subtitleWarning'] = 'Saved without subtitles: the selected track could not be downloaded or read.'
-        check_cancelled()
-        plan['sponsorSegments'] = sponsor_segments(info, options)
-        return json.dumps({'plan': plan})
+            return json.dumps({'plan': prepare_plan(info, data, ydl)})
+    except DownloadCancelled:
+        return json.dumps({'error': 'Cancelled'})
     except Exception as error:
-        message = str(error).removeprefix('ERROR: ')
-        if is_tiktok_url(data.get('url')) and any(reason in message for reason in (
-                'Unexpected response from webpage request', 'Unable to extract challenge data',
-                'Unable to extract universal data for rehydration')):
-            message = ('TikTok returned a verification page instead of video details. '
-                       'Retry the link, or open it in TikTok or Safari to check that it is available.')
-        if 'Requested format is not available' in message and any((data.get('options') or {}).get(key, 'automatic') != 'automatic' for key in ('videoCodec', 'audioCodec')):
-            message = 'The requested codec is not available at this quality. Choose Automatic, another codec, or a different quality.'
-        return json.dumps({'error': message[:1200] or 'Unable to resolve this link.'})
+        return json.dumps({'error': user_error(error, data.get('url')) if 'data' in locals() else safe_message(error)})
+
+
+def download(request):
+    """One upstream session owns extraction, cookies, format headers, and downloads."""
+    context = wrath_native.context() if wrath_native else None
+    try:
+        data = json.loads(request)
+        logger = QuietLogger(context)
+        params, cookies = request_options(data, logger)
+        directory = os.path.abspath(data['directory'])
+        os.makedirs(directory, exist_ok=True)
+        with yt_dlp.YoutubeDL(params) as ydl:
+            for cookie in cookies:
+                ydl.cookiejar.set_cookie(cookie)
+            check_cancelled(context)
+            info = require_info(ydl.extract_info(data['url'], download=False), logger)
+            plan = prepare_plan(info, data, ydl)
+            formats = selected_formats(info)
+            if any(not supported_format(fmt) for fmt in formats):
+                raise ValueError('This format requires an external downloader that is unavailable on iOS.')
+            report(context, {'type': 'resolved', 'plan': plan})
+            local_tracks = []
+            active_index = [0]
+            last_report = [0.0]
+            def progress(status):
+                import time
+                checkpoint(context)
+                now = time.monotonic()
+                if status.get('status') != 'finished' and now - last_report[0] < 0.25:
+                    return
+                last_report[0] = now
+                event = dict(type='progress', index=active_index[0],
+                             bytes=status.get('downloaded_bytes') or 0,
+                             total=status.get('total_bytes') or status.get('total_bytes_estimate') or 0,
+                             speed=status.get('speed'), eta=status.get('eta'),
+                             finished=status.get('status') == 'finished')
+                for key in ('bytes', 'total', 'speed', 'eta'):
+                    value = event[key]
+                    if value is not None and (not isinstance(value, (float, int)) or not math.isfinite(value) or value < 0):
+                        event[key] = None if key in ('speed', 'eta') else 0
+                for key in ('bytes', 'total'):
+                    event[key] = min(int(event[key]), 2**63 - 1)
+                if event['finished'] and not event['total']:
+                    event['total'] = event['bytes']
+                report(context, event)
+            ydl.add_progress_hook(progress)
+            for index, fmt in enumerate(formats):
+                checkpoint(context)
+                active_index[0] = index
+                last_report[0] = 0.0
+                filename = os.path.join(directory, f'track-{index}.' + re.sub(r'[^a-zA-Z0-9]', '', fmt.get('ext') or 'media'))
+                # Match upstream's per-track metadata merge before calling its
+                # downloader. Keep original fragments, headers and options.
+                track_info = dict(info)
+                track_info.pop('requested_formats', None)
+                track_info.pop('requested_downloads', None)
+                track_info.update(fmt)
+                success, _ = ydl.dl(filename, track_info)
+                if not success:
+                    raise ValueError('yt-dlp could not finish downloading the selected format.')
+                check_cancelled(context)
+                if not os.path.isfile(filename) or os.path.getsize(filename) == 0:
+                    raise ValueError('The downloaded media track is empty.')
+                local_tracks.append(dict(url=Path(filename).as_uri(), headers={},
+                                         role='audio' if fmt.get('vcodec') == 'none' else 'video',
+                                         streaming=False, bytes=os.path.getsize(filename)))
+            plan['tracks'] = local_tracks
+            plan['warnings'] = logger.warnings
+            return json.dumps({'plan': plan})
+    except DownloadCancelled:
+        return json.dumps({'error': 'Cancelled'})
+    except Exception as error:
+        return json.dumps({'error': user_error(error, data.get('url')) if 'data' in locals() else safe_message(error)})

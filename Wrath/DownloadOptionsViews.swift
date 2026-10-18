@@ -46,7 +46,8 @@ struct SourceInspectionStatus: View {
             } else {
                 HStack(spacing: 8) {
                     ProgressView().controlSize(.small)
-                    Text("Checking available formats…").font(.subheadline).foregroundStyle(.secondary)
+                    Text("Checking available formats…")
+                        .font(.subheadline).foregroundStyle(.secondary)
                 }
             }
         }
@@ -80,12 +81,20 @@ struct SourceOptions: View {
         OptionRows(cardLayout: cardLayout) {
             CodecPickers(
                 kind: kind, quality: quality, availability: availability, options: $options, cardLayout: cardLayout)
-            if availability.thumbnailAvailable { Toggle("Embed thumbnail", isOn: $options.embedThumbnail) }
+            if availability.thumbnailAvailable {
+                OptionDivider(shown: cardLayout)
+                Toggle("Embed thumbnail", isOn: $options.embedThumbnail)
+            }
             if kind == .video, !availability.subtitles.isEmpty {
+                OptionDivider(shown: cardLayout)
                 SubtitleOptions(tracks: availability.subtitles, options: $options, cardLayout: cardLayout)
             }
-            if isYouTube { SponsorControls(options: $options, cardLayout: cardLayout) }
+            if isYouTube {
+                OptionDivider(shown: cardLayout)
+                SponsorControls(options: $options, cardLayout: cardLayout)
+            }
             if !availability.supports(kind: kind, quality: quality, options: options) {
+                OptionDivider(shown: cardLayout)
                 Text("Choose compatible codecs or another quality.").font(.caption).foregroundStyle(.orange)
             }
         }
@@ -108,6 +117,7 @@ struct CodecPickers: View {
                 }
             }
             if availability.mediaKinds.contains(.audio) {
+                OptionDivider(shown: cardLayout && kind == .video)
                 LabeledContent("Audio codec") {
                     Picker("Audio codec", selection: $options.audioCodec) {
                         ForEach(
@@ -129,6 +139,7 @@ struct SubtitleOptions: View {
         OptionRows(cardLayout: cardLayout) {
             Toggle("Embed subtitles", isOn: $options.embedSubtitles)
             if options.embedSubtitles {
+                OptionDivider(shown: cardLayout)
                 LabeledContent("Subtitle language") {
                     Picker("Subtitle language", selection: $options.subtitleTrack) {
                         Text("Automatic").tag("automatic")
@@ -153,6 +164,7 @@ struct SponsorControls: View {
             )
             .accessibilityHint("Remove selected segments when enabled")
             if options.sponsorMode != .off {
+                OptionDivider(shown: cardLayout)
                 NavigationLink {
                     List {
                         Section {
@@ -201,18 +213,16 @@ private struct OptionRows<Content: View>: View {
     @ViewBuilder var content: Content
     var body: some View {
         if cardLayout {
-            VStack(alignment: .leading, spacing: 16) {
-                Group(subviews: content) { rows in
-                    ForEach(rows) { row in
-                        row
-                        if row.id != rows.last?.id { Divider() }
-                    }
-                }
-            }
+            VStack(alignment: .leading, spacing: 16) { content }
         } else {
             content
         }
     }
+}
+
+private struct OptionDivider: View {
+    let shown: Bool
+    var body: some View { if shown { Divider() } }
 }
 
 struct SponsorOptions: View {

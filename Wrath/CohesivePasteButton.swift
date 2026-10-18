@@ -1,54 +1,34 @@
 import SwiftUI
 import UIKit
-import UniformTypeIdentifiers
 
-/// Keeps the system's explicit paste authorization while matching the link field.
-struct CohesivePasteButton: UIViewRepresentable {
+struct CohesivePasteButton: View {
     let pasted: (String) -> Void
-    final class PasteTarget: UIView {
-        var pasted: (String) -> Void = { _ in }
-        override init(frame: CGRect) {
-            super.init(frame: frame)
-            pasteConfiguration = UIPasteConfiguration(acceptableTypeIdentifiers: [
-                UTType.url.identifier, UTType.plainText.identifier,
-            ])
-        }
-        required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-        override func paste(itemProviders: [NSItemProvider]) {
-            guard let provider = itemProviders.first else { return }
-            if provider.canLoadObject(ofClass: NSURL.self) {
-                provider.loadObject(ofClass: NSURL.self) { [weak self] object, _ in
-                    guard let url = object as? URL else { return }
-                    Task { @MainActor in self?.pasted(url.absoluteString) }
-                }
-            } else if provider.canLoadObject(ofClass: NSString.self) {
-                provider.loadObject(ofClass: NSString.self) { [weak self] object, _ in
-                    guard let text = object as? String else { return }
-                    Task { @MainActor in self?.pasted(text) }
-                }
+    @State private var canPaste = UIPasteboard.general.hasURLs || UIPasteboard.general.hasStrings
+
+    var body: some View {
+        Button {
+            let clipboard = UIPasteboard.general
+            if let value = clipboard.url?.absoluteString ?? clipboard.string { pasted(value) }
+        } label: {
+            HStack(spacing: 12) {
+                Image(systemName: "doc.on.clipboard").font(.body.weight(.medium))
+                Text("PASTE LINK")
+                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
+                    .tracking(1.8)
             }
+            .frame(maxWidth: .infinity, minHeight: 28)
+        }
+        .buttonStyle(.borderedProminent).buttonBorderShape(.capsule).controlSize(.large)
+        .tint(.orange).foregroundStyle(.white).disabled(!canPaste)
+        .accessibilityLabel("Paste link")
+        .onReceive(NotificationCenter.default.publisher(for: UIPasteboard.changedNotification)) { _ in
+            refreshAvailability()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification)) { _ in
+            refreshAvailability()
         }
     }
-    func makeUIView(context: Context) -> PasteTarget {
-        let target = PasteTarget(frame: .zero)
-        let config = UIPasteControl.Configuration()
-        config.displayMode = .iconOnly
-        config.cornerStyle = .capsule
-        config.baseBackgroundColor = .tertiarySystemFill
-        config.baseForegroundColor = .label
-        let control = UIPasteControl(configuration: config)
-        control.target = target
-        control.accessibilityLabel = "Paste link"
-        control.translatesAutoresizingMaskIntoConstraints = false
-        target.addSubview(control)
-        NSLayoutConstraint.activate([
-            control.leadingAnchor.constraint(equalTo: target.leadingAnchor),
-            control.trailingAnchor.constraint(equalTo: target.trailingAnchor),
-            control.topAnchor.constraint(equalTo: target.topAnchor),
-            control.bottomAnchor.constraint(equalTo: target.bottomAnchor),
-        ])
-        target.pasted = pasted
-        return target
+    private func refreshAvailability() {
+        canPaste = UIPasteboard.general.hasURLs || UIPasteboard.general.hasStrings
     }
-    func updateUIView(_ view: PasteTarget, context: Context) { view.pasted = pasted }
 }

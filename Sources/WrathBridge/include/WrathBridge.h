@@ -4,9 +4,13 @@
 typedef struct WrathToken WrathToken;
 WrathToken *wrath_token_create(void);
 void wrath_token_cancel(WrathToken *token);
+void wrath_token_set_paused(WrathToken *token, int paused);
+int wrath_wait_if_paused(WrathToken *token);
 int wrath_is_cancelled(WrathToken *token);
 void wrath_token_free(WrathToken *token);
 void wrath_free(void *pointer);
+typedef void (*WrathEvent)(const char *json, void *context);
+char *wrath_download(const char *root, const char *request, WrathToken *token, WrathEvent event, void *context);
 char *wrath_extract(const char *root, const char *cache, const char *request, WrathToken *token);
 const char *wrath_ffmpeg_version(void);
 typedef void (*WrathProgress)(double progress, void *context);
