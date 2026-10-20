@@ -191,7 +191,9 @@ struct RenameFileSheet: View {
                         .textInputAutocapitalization(.sentences).autocorrectionDisabled().submitLabel(.done)
                         .onSubmit(save)
                 } footer: {
-                    Text("The file extension stays the same.")
+                    Text(
+                        item.job.kind == .images
+                            ? "Photos keep their filenames inside the gallery." : "The file extension stays the same.")
                 }
                 if let error { Section { Text(error).font(.subheadline).foregroundStyle(.orange) } }
                 if saving {
@@ -213,7 +215,10 @@ struct RenameFileSheet: View {
                 }
         }.presentationDetents([.medium, .large]).interactiveDismissDisabled(saving)
             .onAppear {
-                name = (item.job.filename as NSString?)?.deletingPathExtension ?? item.job.title
+                name =
+                    item.job.kind == .images
+                    ? (item.job.filename ?? item.job.title)
+                    : ((item.job.filename as NSString?)?.deletingPathExtension ?? item.job.title)
                 focused = true
             }
     }

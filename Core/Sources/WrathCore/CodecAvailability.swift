@@ -32,6 +32,7 @@ public struct CodecChoice: Codable, Equatable, Sendable {
 }
 
 public struct CodecAvailability: Codable, Equatable, Sendable {
+    public let gallery: GalleryInfo?
     public let choices: [CodecChoice]
     public let thumbnailAvailable: Bool
     public let thumbnail: URL?
@@ -47,7 +48,7 @@ public struct CodecAvailability: Codable, Equatable, Sendable {
         choices: [CodecChoice], thumbnailAvailable: Bool = false, title: String? = nil,
         author: String? = nil, duration: Double? = nil, formatCount: Int? = nil,
         maxHeight: Int? = nil, estimatedBytes: Int64? = nil, exactQualities: Bool = false,
-        subtitles: [SubtitleChoice] = [], thumbnail: URL? = nil
+        subtitles: [SubtitleChoice] = [], thumbnail: URL? = nil, gallery: GalleryInfo? = nil
     ) {
         self.choices = choices
         self.thumbnailAvailable = thumbnailAvailable
@@ -60,10 +61,11 @@ public struct CodecAvailability: Codable, Equatable, Sendable {
         self.exactQualities = exactQualities
         self.subtitles = subtitles
         self.thumbnail = thumbnail
+        self.gallery = gallery
     }
     private enum CodingKeys: String, CodingKey {
         case choices, thumbnailAvailable, thumbnail, subtitles, exactQualities, title, author, duration, formatCount,
-            maxHeight, estimatedBytes
+            maxHeight, estimatedBytes, gallery
     }
     public init(from decoder: Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
@@ -78,12 +80,14 @@ public struct CodecAvailability: Codable, Equatable, Sendable {
         formatCount = try values.decodeIfPresent(Int.self, forKey: .formatCount)
         maxHeight = try values.decodeIfPresent(Int.self, forKey: .maxHeight)
         estimatedBytes = try values.decodeIfPresent(Int64.self, forKey: .estimatedBytes)
+        gallery = try values.decodeIfPresent(GalleryInfo.self, forKey: .gallery)
     }
     private func matches(_ choice: CodecChoice, kind: MediaKind, quality: Quality) -> Bool {
         choice.kind == kind && (kind == .audio || choice.quality == quality)
     }
     public var mediaKinds: [MediaKind] {
-        MediaKind.allCases.filter { kind in choices.contains { $0.kind == kind } }
+        if let gallery, gallery.count > 0 { return [.images] }
+        return MediaKind.allCases.filter { kind in choices.contains { $0.kind == kind } }
     }
     public var qualities: [Quality] {
         let values = Set(choices.filter { $0.kind == .video }.map(\.quality))
@@ -113,7 +117,8 @@ public struct CodecAvailability: Codable, Equatable, Sendable {
         }
     }
     public func supports(kind: MediaKind, quality: Quality, options: DownloadOptions) -> Bool {
-        audioCodecs(kind: kind, quality: quality, videoCodec: options.videoCodec).contains(options.audioCodec)
+        if kind == .images { return gallery?.count ?? 0 > 0 }
+        return audioCodecs(kind: kind, quality: quality, videoCodec: options.videoCodec).contains(options.audioCodec)
     }
     public func estimatedSize(kind: MediaKind, quality: Quality, options: DownloadOptions) -> Int64? {
         choices.first {

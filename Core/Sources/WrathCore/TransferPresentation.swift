@@ -44,12 +44,22 @@ public enum ProcessingPhase: Int32, Sendable {
 }
 
 public enum DownloadWarnings {
+    /// Extractor diagnostics do not mean a successfully saved gallery is incomplete.
+    /// Apply this to persisted jobs too, so old galleries lose the generic warning.
+    public static func visible(_ warning: String?, for kind: MediaKind) -> String? {
+        guard let warning, !warning.isEmpty else { return nil }
+        guard kind == .images else { return warning }
+        let skipped = "Saved images only; video or unsupported linked attachments were not included."
+        return warning.contains(skipped) ? skipped : nil
+    }
+
     public static func appending(_ warning: String, to current: String?) -> String {
         var parts = (current ?? "").components(separatedBy: " · ").filter { !$0.isEmpty }
         if !parts.contains(warning) { parts.append(warning) }
         return parts.joined(separator: " · ")
     }
     public static func summary(_ warning: String) -> String {
+        if warning.contains("Saved images only;") { return "Images only" }
         var missing: [String] = []
         if warning.contains("Saved without thumbnail") { missing.append("thumbnail") }
         if warning.contains("Saved without subtitles") { missing.append("subtitles") }

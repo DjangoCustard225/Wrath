@@ -1,4 +1,4 @@
-"""Upstream yt-dlp extraction and downloads; native FFmpeg handles local processing."""
+"""Upstream yt-dlp and gallery-dl extraction; native FFmpeg handles media processing."""
 import json
 import os
 import sys
@@ -16,6 +16,248 @@ from pathlib import Path
 
 import certifi
 import yt_dlp
+
+GALLERY_EXTENSIONS = frozenset(('jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'heic'))
+GALLERY_CACHE = {}
+GALLERY_LIMIT = 200
+
+
+class GalleryLimitError(ValueError):
+    pass
+
+
+def gallery_extractor(url):
+    """Only bounded post/album extractors; never crawl profiles or feeds."""
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.scheme not in ('http', 'https') or parsed.username or parsed.password:
+        return None
+    domains = ('reddit.com', 'redd.it', 'imgur.com', 'instagram.com', 'twitter.com', 'x.com',
+               'pixiv.net', 'flickr.com', 'deviantart.com', 'tumblr.com', 'bsky.app', 'pinterest.com', 'tiktok.com')
+    host = (parsed.hostname or '').lower()
+    if Path(parsed.path).suffix[1:].lower() not in GALLERY_EXTENSIONS and not any(host == d or host.endswith('.' + d) for d in domains):
+        return None
+    from gallery_dl import config, extractor
+    # Extractor token caches must not create plaintext credentials outside the
+    # app's Keychain-backed cookie settings, including in gallery-dl's defaults.
+    config.set(('cache',), 'file', ':memory:')
+    instance = extractor.find(url)
+    if not instance or instance.subcategory == 'reel':
+        return None
+    allowed = ('PostExtractor', 'ImageExtractor', 'GalleryExtractor', 'AlbumExtractor',
+               'SubmissionExtractor', 'TweetExtractor', 'StatusExtractor', 'WorkExtractor',
+               'DeviationExtractor', 'PinExtractor', 'PhotoExtractor')
+    if instance.__class__.__name__.endswith(allowed) or instance.__class__.__name__ == 'DirectlinkExtractor':
+        return instance
+    return None
+
+
+def close_gallery(catalog):
+    for session in catalog['sessions']:
+        session.close()
+
+
+def clear_gallery_cache():
+    for _, catalog in GALLERY_CACHE.values():
+        close_gallery(catalog)
+    GALLERY_CACHE.clear()
+
+
+def gallery_catalog(data, context=None, consume=False):
+    import logging
+    import time
+    key = (data['url'], hashlib.sha256(json.dumps(data.get('socialAccess', {}), sort_keys=True).encode()).hexdigest())
+    for old_key, (stamp, catalog) in list(GALLERY_CACHE.items()):
+        if time.monotonic() - stamp > 180:
+            GALLERY_CACHE.pop(old_key)
+            close_gallery(catalog)
+    if key in GALLERY_CACHE:
+        return GALLERY_CACHE.pop(key)[1] if consume else GALLERY_CACHE[key][1]
+    root = gallery_extractor(data['url'])
+    if root is None:
+        return None
+    from gallery_dl.extractor.message import Message
+    catalog = dict(files=[], sessions=[], title='', author='', skippedVideos=0, warnings=[])
+    visited, media_seen = set(), set()
+    cookies = social_cookie_jar(data['url'], data.get('socialAccess', {}))
+
+    class LogHandler(logging.Handler):
+        def emit(self, record):
+            message = safe_message(record.getMessage())
+            if record.levelno >= logging.WARNING and message not in catalog['warnings'] and len(catalog['warnings']) < 4:
+                catalog['warnings'].append(message)
+
+    def visit(instance, depth):
+        checkpoint(context)
+        if instance.url in visited:
+            return
+        if depth > 2 or len(visited) >= 8:
+            raise GalleryLimitError('This gallery links to too many collections. Use a direct post or album link.')
+        visited.add(instance.url)
+        logger = logging.Logger('wrath.gallery', logging.WARNING)
+        logger.addHandler(LogHandler())
+        logger.propagate = False
+        instance.log = logger
+        original_config = instance.config
+        overrides = {'retries': 1, 'timeout': 15, 'sleep-request': 0, 'sleep-429': 1,
+                     'recursion': 0, 'comments': 0, 'selftext': False, 'cookies-update': False}
+        agent = social_user_agent(instance.url, data.get('socialAccess', {}))
+        if agent:
+            overrides['user-agent'] = agent
+        instance.config = lambda name, default=None: overrides.get(name, original_config(name, default))
+        original_request = instance.request
+        def request(*args, **kwargs):
+            checkpoint(context)
+            response = original_request(*args, **kwargs)
+            checkpoint(context)
+            return response
+        instance.request = request
+        try:
+            # Initialize the upstream session before site-specific API calls so
+            # saved Reddit cookies are available without a plaintext cookie file.
+            instance._init_options()
+            instance._init_session()
+            catalog['sessions'].append(instance.session)
+            instance.cookies = instance.session.cookies
+            if instance.cookies_domain is not None:
+                instance._init_cookies()
+            for cookie in cookies:
+                instance.session.cookies.set_cookie(copy.copy(cookie))
+            for index, message in enumerate(instance):
+                checkpoint(context)
+                if index > 1000:
+                    raise GalleryLimitError('This link contains too much media. Use an individual post or album.')
+                if message[0] == Message.Queue:
+                    nested = gallery_extractor(message[1])
+                    if nested:
+                        visit(nested, depth + 1)
+                    else:
+                        catalog['skippedVideos'] += 1
+                    continue
+                if message[0] not in (Message.Directory, Message.Url):
+                    continue
+                metadata = message[2]
+                if not catalog['title']:
+                    title = metadata.get('title') or metadata.get('description') or metadata.get('caption') or ''
+                    if not title and instance.__class__.__name__ == 'DirectlinkExtractor':
+                        title = metadata.get('filename') or ''
+                    catalog['title'] = str(title).strip()[:300] if isinstance(title, str) else ''
+                    user = metadata.get('author') or metadata.get('user') or metadata.get('uploader') or metadata.get('username') or ''
+                    if isinstance(user, dict):
+                        user = user.get('name') or user.get('username') or ''
+                    catalog['author'] = str(user)[:120] if isinstance(user, str) else ''
+                if message[0] != Message.Url:
+                    continue
+                url = message[1]
+                if url in media_seen:
+                    continue
+                media_seen.add(url)
+                extension = str(metadata.get('extension') or Path(urllib.parse.urlsplit(url).path).suffix[1:]).lower()
+                if extension not in GALLERY_EXTENSIONS or urllib.parse.urlsplit(url).scheme not in ('http', 'https'):
+                    catalog['skippedVideos'] += 1
+                    continue
+                if len(catalog['files']) >= GALLERY_LIMIT:
+                    raise GalleryLimitError('This gallery exceeds 200 images. Use a smaller post or album.')
+                headers = metadata.get('_http_headers') or {}
+                headers = {k: v for k, v in headers.items() if k.lower() in ('referer', 'user-agent', 'accept')}
+                catalog['files'].append(dict(url=url, extension=extension, session=instance.session, headers=headers))
+        finally:
+            # Native contexts belong to one bridge call and must never survive
+            # in the short-lived inspection cache for a later download thread.
+            instance.request = original_request
+
+    try:
+        visit(root, 0)
+        if not catalog['files']:
+            close_gallery(catalog)
+            return None
+        if not catalog['title']:
+            catalog['title'] = (catalog['author'] + ' photos').strip() if catalog['author'] else 'Photo gallery'
+        if not consume:
+            while len(GALLERY_CACHE) >= 4:
+                close_gallery(GALLERY_CACHE.pop(next(iter(GALLERY_CACHE)))[1])
+            GALLERY_CACHE[key] = (time.monotonic(), catalog)
+        return catalog
+    except BaseException:
+        close_gallery(catalog)
+        raise
+
+
+def gallery_availability(catalog):
+    return dict(choices=[], thumbnailAvailable=False, title=catalog['title'], author=catalog['author'],
+                thumbnail=catalog['files'][0]['url'], gallery=dict(count=len(catalog['files']),
+                skippedVideos=catalog['skippedVideos']))
+
+
+def download_gallery(data, context):
+    import time
+    catalog = gallery_catalog(data, context, consume=True)
+    if catalog is None:
+        raise ValueError('No supported images were found. Check the post link again.')
+    plan = dict(title=catalog['title'], author=catalog['author'], source=data['url'],
+                thumbnail=catalog['files'][0]['url'], tracks=[], fileExtension='gallery',
+                quality='Original images', galleryFiles=[], warnings=[])
+    if catalog['skippedVideos']:
+        plan['warnings'].append('Saved images only; video or unsupported linked attachments were not included.')
+    directory = Path(data['directory']) / 'gallery'
+    completed_bytes = 0
+    start = time.monotonic()
+    try:
+        directory.mkdir(parents=True, exist_ok=False)
+        report(context, {'type': 'resolved', 'plan': plan})
+        for index, media in enumerate(catalog['files']):
+            checkpoint(context)
+            filename = f'{index + 1:03d}.{media["extension"]}'
+            target = directory / filename
+            received, last_report = 0, 0
+            with media['session'].get(media['url'], headers=media['headers'], stream=True, timeout=(15, 20)) as response:
+                response.raise_for_status()
+                content_type = response.headers.get('Content-Type', '').split(';')[0].strip().lower()
+                if content_type and not (content_type.startswith('image/') or content_type == 'application/octet-stream'):
+                    raise ValueError('The website returned a page instead of an image. Check access to this post.')
+                total = int(response.headers.get('Content-Length') or 0)
+                with target.open('xb') as output:
+                    for chunk in response.iter_content(64 * 1024):
+                        checkpoint(context)
+                        output.write(chunk)
+                        received += len(chunk)
+                        now = time.monotonic()
+                        if now - last_report >= 0.25:
+                            fraction = (index + min(0.99, received / total if total > 0 else 0)) / len(catalog['files'])
+                            report(context, dict(type='galleryProgress', bytes=completed_bytes + received,
+                                                 fraction=fraction, imageIndex=index + 1, imageCount=len(catalog['files']),
+                                                 speed=(completed_bytes + received) / max(0.1, now - start)))
+                            last_report = now
+            checkpoint(context)
+            if received == 0 or (total > 0 and received != total and not response.headers.get('Content-Encoding')):
+                raise ValueError('An image download was incomplete. Add the link again to retry.')
+            with target.open('rb') as image:
+                signature = image.read(64)
+            valid = (signature.startswith((b'\xff\xd8\xff', b'\x89PNG\r\n\x1a\n', b'GIF87a', b'GIF89a'))
+                     or (signature.startswith(b'RIFF') and signature[8:12] == b'WEBP')
+                     or (signature[4:8] == b'ftyp' and any(brand in signature[8:] for brand in
+                         (b'avif', b'avis', b'heic', b'heix', b'hevc', b'hevx', b'mif1', b'msf1'))))
+            if not valid:
+                raise ValueError('The website did not return a supported image. Add the link again to retry.')
+            if signature.startswith(b'\xff\xd8\xff'):
+                actual = 'jpg'
+            elif signature.startswith(b'\x89PNG'):
+                actual = 'png'
+            elif signature.startswith(b'GIF'):
+                actual = 'gif'
+            elif signature.startswith(b'RIFF'):
+                actual = 'webp'
+            else:
+                actual = 'avif' if b'avif' in signature[8:] or b'avis' in signature[8:] else 'heic'
+            if actual != media['extension']:
+                filename = f'{index + 1:03d}.{actual}'
+                target.rename(directory / filename)
+            completed_bytes += received
+            plan['galleryFiles'].append(dict(filename=filename, bytes=received))
+            report(context, dict(type='galleryProgress', bytes=completed_bytes, fraction=(index + 1) / len(catalog['files']),
+                                 imageIndex=index + 1, imageCount=len(catalog['files'])))
+        return plan
+    finally:
+        close_gallery(catalog)
 
 try:
     import wrath_native
@@ -439,15 +681,30 @@ def is_youtube_url(url):
 
 # Keep social-site session cookies isolated from YouTube and other hosts.
 # No browser-wide cookie file or arbitrary Cookie HTTP header is accepted here.
-SOCIAL_DOMAINS = {'reddit': ('reddit.com', 'redd.it')}
+SOCIAL_DOMAINS = {'reddit': ('reddit.com', 'redd.it'), 'instagram': ('instagram.com', 'instagr.am')}
 
 
 def domain_matches(host, domains):
     return any(host == domain or host.endswith('.' + domain) for domain in domains)
 
 
+def social_user_agent(url, access):
+    if not isinstance(access, dict):
+        return None
+    platform = access.get('platform')
+    domains = SOCIAL_DOMAINS.get(platform) if isinstance(platform, str) else None
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != 'https' or not domains or not domain_matches((parsed.hostname or '').lower(), domains):
+        return None
+    agent = access.get('userAgent')
+    if agent is not None and (not isinstance(agent, str) or not agent or len(agent) > 1024
+                              or any(ord(c) < 32 or ord(c) >= 127 for c in agent)):
+        raise ValueError('The saved social-media User-Agent is invalid. Reset it in Settings.')
+    return agent
+
+
 def social_cookie_jar(url, access):
-    invalid = 'Could not read saved social-media cookies. Reconnect your account or import a fresh cookies.txt file in Settings > Cookies.'
+    invalid = 'Could not read saved social-media cookies. Sign in again in Settings > Cookies.'
     if not isinstance(access, dict):
         raise ValueError(invalid)
     if not access:
@@ -534,17 +791,9 @@ def request_options(data, logger):
     if not is_youtube_url(data.get('url')):
         social = data.get('socialAccess') or {}
         cookies.extend(social_cookie_jar(data.get('url'), social))
-        if isinstance(social, dict):
-            domains = SOCIAL_DOMAINS.get(social.get('platform')) if isinstance(social.get('platform'), str) else None
-            parsed = urllib.parse.urlparse(data.get('url'))
-            host = (parsed.hostname or '').lower()
-            if parsed.scheme == 'https' and domains and domain_matches(host, domains):
-                agent = social.get('userAgent')
-                if agent is not None and (not isinstance(agent, str) or not agent or len(agent) > 1024
-                                          or any(ord(c) < 32 or ord(c) >= 127 for c in agent)):
-                    raise ValueError('The saved social-media User-Agent is invalid. Reset it in Settings.')
-                if agent:
-                    result['http_headers'] = {'User-Agent': agent}
+        agent = social_user_agent(data.get('url'), social)
+        if agent:
+            result['http_headers'] = {'User-Agent': agent}
     return result, cookies
 
 
@@ -566,7 +815,19 @@ def extract(request):
         data = json.loads(request)
         check_cancelled()
         if data.get('operation') == 'clearInspectionCache':
+            clear_gallery_cache()
             return json.dumps({'cleared': True})
+        if data.get('operation') == 'inspect':
+            try:
+                catalog = gallery_catalog(data)
+                if catalog:
+                    return json.dumps({'availability': gallery_availability(catalog)})
+            except (DownloadCancelled, GalleryLimitError):
+                raise
+            except Exception:
+                # A video post may also match an image extractor. Preserve the
+                # existing yt-dlp path when gallery-dl cannot find its images.
+                check_cancelled()
         logger = QuietLogger()
         params, cookies = request_options(data, logger)
         with (InspectionYoutubeDL if data.get('operation') == 'inspect' else yt_dlp.YoutubeDL)(params) as ydl:
@@ -588,6 +849,8 @@ def download(request):
     context = wrath_native.context() if wrath_native else None
     try:
         data = json.loads(request)
+        if data.get('kind') == 'images':
+            return json.dumps({'plan': download_gallery(data, context)})
         logger = QuietLogger(context)
         params, cookies = request_options(data, logger)
         directory = os.path.abspath(data['directory'])

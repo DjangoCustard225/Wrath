@@ -21,15 +21,15 @@ struct LibraryView: View {
     @State private var deleting: JobItem?
     @State private var busyDeleting = false
     private var ordered: [JobItem] { store.library.sorted { sort.precedes($0.job, $1.job) } }
-    private var itemIDs: [UUID] { ordered.map(\.id) }
     private var deletionTransition: AnyTransition {
         reduceMotion ? .opacity : .opacity.combined(with: .scale(scale: 0.97, anchor: .top))
     }
     var body: some View {
+        let library = ordered
         NavigationStack {
             ZStack {
                 LibraryListScrollView {
-                    ForEach(ordered) { item in
+                    ForEach(library) { item in
                         Button {
                             preview(item)
                         } label: {
@@ -41,21 +41,27 @@ struct LibraryView: View {
                             .transition(.asymmetric(insertion: .opacity, removal: deletionTransition))
                     }
                 }
-                if store.library.isEmpty {
+                if library.isEmpty {
                     ContentUnavailableView(
                         "No saved files", systemImage: "play.rectangle",
-                        description: Text("Downloaded video and audio will appear here.")
+                        description: Text("Downloaded videos, audio, and photo galleries will appear here.")
                     )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                     .background(Color(uiColor: .systemGroupedBackground))
                     .transition(.opacity)
                 }
             }
-            .animation(reduceMotion ? nil : .smooth(duration: 0.32), value: itemIDs)
+            .animation(reduceMotion ? nil : .smooth(duration: 0.32), value: library.map(\.id))
             .navigationTitle("Library")
             .navigationBarTitleDisplayMode(.large)
             .navigationDestination(isPresented: Binding(get: { detail != nil }, set: { if !$0 { detail = nil } })) {
-                if let detail { FileDetailsView(item: detail, store: store) }
+                if let detail {
+                    if detail.job.kind == .images {
+                        GalleryDetailsView(item: detail, store: store)
+                    } else {
+                        FileDetailsView(item: detail, store: store)
+                    }
+                }
             }
             .toolbar {
                 ToolbarItem(placement: .topBarTrailing) {
@@ -96,12 +102,12 @@ struct LibraryView: View {
         "Delete this file (\(MediaLabels.bytes(deleting?.job.bytes ?? 0))) from Wrath?"
     }
     private func preview(_ item: JobItem) {
-        if let url = store.fileURL(item) { sheet = .preview(url) }
+        if item.job.kind == .images { detail = item } else if let url = store.fileURL(item) { sheet = .preview(url) }
     }
     @ViewBuilder private func fileActions(for item: JobItem) -> some View {
         Button("File details", systemImage: "info.circle") { detail = item }
         Button("Rename", systemImage: "pencil") { sheet = .rename(item) }
-        if let url = store.fileURL(item) {
+        if item.job.kind != .images, let url = store.fileURL(item) {
             ShareLink(item: url) { Label("Share file", systemImage: "square.and.arrow.up") }
         }
         Button("Delete file", systemImage: "trash", role: .destructive) { deleting = item }
@@ -112,15 +118,19 @@ struct LibraryCard: View {
     var item: JobItem
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            MediaArtwork(url: item.job.thumbnail, kind: item.job.kind, maxPixelSize: 1200)
+            MediaArtwork(url: item.libraryArtwork, kind: item.job.kind, maxPixelSize: 1200)
                 .aspectRatio(16.0 / 9.0, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 16))
             VStack(alignment: .leading, spacing: 5) {
                 Text(item.job.title).font(.headline).lineLimit(3)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                Text("\(item.job.kind.rawValue.capitalized) · \(MediaLabels.bytes(item.job.bytes))")
-                    .font(.caption).foregroundStyle(.secondary)
-                if let warning = item.job.warning {
+                Text(
+                    item.job.kind == .images
+                        ? "\(item.job.galleryFiles?.count ?? 0) photos · \(MediaLabels.bytes(item.job.bytes))"
+                        : "\(item.job.kind.rawValue.capitalized) · \(MediaLabels.bytes(item.job.bytes))"
+                )
+                .font(.caption).foregroundStyle(.secondary)
+                if let warning = DownloadWarnings.visible(item.job.warning, for: item.job.kind) {
                     Label(DownloadWarnings.summary(warning), systemImage: "exclamationmark.triangle").font(.caption)
                         .foregroundStyle(.orange)
                 }

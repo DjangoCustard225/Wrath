@@ -2,12 +2,14 @@
 import Foundation
 import PackageDescription
 
+let minimumIOS = ProcessInfo.processInfo.environment["WRATH_VARIANT"] == "compatibility" ? "17.0" : "26.0"
+
 let variantSettings: [SwiftSetting] =
     ProcessInfo.processInfo.environment["WRATH_VARIANT"] == "compatibility"
     ? [.define("WRATH_COMPATIBILITY")] : []
 
 let package = Package(
-    name: "Wrath", platforms: [.iOS("17.0")],
+    name: "Wrath", platforms: [.iOS(minimumIOS)],
     products: [
         .library(name: "Wrath", targets: ["Wrath"]),
         .library(name: "WrathBridge", targets: ["WrathBridge"]),
@@ -20,7 +22,8 @@ let package = Package(
             path: "Sources/WrathBridge"),
         .target(
             name: "Wrath", dependencies: ["WrathBridge", .product(name: "WrathCore", package: "Core")],
-            path: "Wrath", exclude: ["Info.plist", "Resources", "PrivacyInfo.xcprivacy"], swiftSettings: variantSettings
+            path: "Wrath", exclude: ["Info.plist", "Resources", "PrivacyInfo.xcprivacy"],
+            swiftSettings: variantSettings
         ),
     ], swiftLanguageModes: [.v5]
 )

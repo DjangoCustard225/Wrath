@@ -1,5 +1,9 @@
 import Foundation
 
+#if canImport(Darwin)
+    import Darwin
+#endif
+
 public enum LibraryFileError: LocalizedError {
     case invalidName, collision, invalidFile
     public var errorDescription: String? {
@@ -78,7 +82,54 @@ public actor LibraryFiles {
         }
     }
 
-    public static func renamedFilename(stem: String, original: String) throws -> String {
+    public static func publishGallery(
+        _ staged: URL, files: [GalleryFile], to documents: URL, title: String, reservedNames: Set<String> = []
+    ) throws -> String {
+        let manager = FileManager.default
+        let values = try staged.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+        guard values.isDirectory == true, values.isSymbolicLink != true,
+            !files.isEmpty, files.count <= 200, files.allSatisfy(\.isValid),
+            Set(files.map(\.filename)).count == files.count,
+            Set(try manager.contentsOfDirectory(atPath: staged.path)) == Set(files.map(\.filename))
+        else { throw LibraryFileError.invalidFile }
+        for file in files {
+            let info = try staged.appendingPathComponent(file.filename).resourceValues(
+                forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .fileSizeKey])
+            guard info.isRegularFile == true, info.isSymbolicLink != true,
+                Int64(info.fileSize ?? 0) == file.bytes
+            else { throw LibraryFileError.invalidFile }
+        }
+        let base = (LinkInput.filename(title: title, extension: "mp4") as NSString).deletingPathExtension
+        let reserved = Set(reservedNames.map { $0.precomposedStringWithCanonicalMapping.lowercased() })
+        var number = 1
+        while true {
+            let name = number == 1 ? base : "\(base) (\(number))"
+            if reserved.contains(name.precomposedStringWithCanonicalMapping.lowercased()) {
+                number += 1
+                continue
+            }
+            do {
+                #if canImport(Darwin)
+                    // Unlike ordinary rename(), this cannot replace even an empty
+                    // directory created by Files between choosing and publishing.
+                    if renamex_np(staged.path, documents.appendingPathComponent(name).path, UInt32(RENAME_EXCL)) != 0 {
+                        if errno == EEXIST || errno == ENOTEMPTY {
+                            number += 1
+                            continue
+                        }
+                        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                    }
+                #else
+                    try manager.moveItem(at: staged, to: documents.appendingPathComponent(name))
+                #endif
+                return name
+            } catch let error as CocoaError where error.code == .fileWriteFileExists {
+                number += 1
+            }
+        }
+    }
+
+    public static func renamedFilename(stem: String, original: String, isGallery: Bool = false) throws -> String {
         let invalid = CharacterSet.controlCharacters.union(CharacterSet(charactersIn: "/\\:*?\"<>|"))
         let cleaned = stem.unicodeScalars.map { invalid.contains($0) ? "_" : String($0) }.joined()
             .trimmingCharacters(in: .whitespacesAndNewlines.union(CharacterSet(charactersIn: ".")))
@@ -88,21 +139,22 @@ public actor LibraryFiles {
             guard limited.utf8.count + String(character).utf8.count <= 200 else { break }
             limited.append(character)
         }
-        let ext = (original as NSString).pathExtension
+        let ext = isGallery ? "" : (original as NSString).pathExtension
         return limited + (ext.isEmpty ? "" : "." + ext)
     }
-    private func file(_ name: String) throws -> URL {
+    private func file(_ name: String, isGallery: Bool = false) throws -> URL {
         guard !name.isEmpty, name == (name as NSString).lastPathComponent, name != ".", name != ".." else {
             throw LibraryFileError.invalidFile
         }
         let url = documents.appendingPathComponent(name)
-        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey])
-        guard values.isRegularFile == true, values.isSymbolicLink != true else { throw LibraryFileError.invalidFile }
+        let values = try url.resourceValues(forKeys: [.isRegularFileKey, .isSymbolicLinkKey, .isDirectoryKey])
+        guard isGallery ? values.isDirectory == true : values.isRegularFile == true, values.isSymbolicLink != true
+        else { throw LibraryFileError.invalidFile }
         return url
     }
-    public func rename(_ original: String, stem: String) throws -> String {
-        let source = try file(original)
-        let name = try Self.renamedFilename(stem: stem, original: original)
+    public func rename(_ original: String, stem: String, isGallery: Bool = false) throws -> String {
+        let source = try file(original, isGallery: isGallery)
+        let name = try Self.renamedFilename(stem: stem, original: original, isGallery: isGallery)
         if name == original { return original }
         let destination = documents.appendingPathComponent(name)
         guard !FileManager.default.fileExists(atPath: destination.path) else { throw LibraryFileError.collision }
@@ -111,12 +163,12 @@ public actor LibraryFiles {
         { throw LibraryFileError.collision }
         return name
     }
-    public func delete(_ names: [String]) -> FileDeletionReport {
+    public func delete(_ names: [String], galleries: Set<String> = []) -> FileDeletionReport {
         var deleted = Set<String>()
         var failures: [String: String] = [:]
         for name in Set(names) {
             do {
-                try FileManager.default.removeItem(at: file(name))
+                try FileManager.default.removeItem(at: file(name, isGallery: galleries.contains(name)))
                 deleted.insert(name)
             } catch { failures[name] = error.localizedDescription }
         }

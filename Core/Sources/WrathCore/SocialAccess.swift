@@ -6,7 +6,7 @@ public enum SocialPlatform: String, CaseIterable, Identifiable, Sendable {
     case instagram, tiktok, facebook, x, reddit, threads
 
     public static var cookiePlatforms: [Self] { allCases.filter(\.supportsCookies) }
-    public var supportsCookies: Bool { self == .reddit }
+    public var supportsCookies: Bool { self == .reddit || self == .instagram }
 
     public var id: String { rawValue }
     public var name: String {
@@ -47,9 +47,9 @@ public enum SocialCookiesError: LocalizedError {
     case invalidFile, tooLarge, noCookies
     public var errorDescription: String? {
         switch self {
-        case .invalidFile: "Choose a valid Netscape-format cookies.txt export for this website."
-        case .tooLarge: "Cookie export is too large. Export cookies for this website only."
-        case .noCookies: "No unexpired cookies for this website were found. Export a fresh logged-in session."
+        case .invalidFile: "The saved cookie session could not be read. Sign in again."
+        case .tooLarge: "This cookie session is too large. Clear the website session and sign in again."
+        case .noCookies: "No unexpired cookies for this website were found. Finish signing in, then save the session."
         }
     }
 }

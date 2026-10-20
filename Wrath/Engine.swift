@@ -24,6 +24,9 @@ struct DownloadEvent: Decodable, Sendable {
     let speed: Double?
     let eta: Double?
     let finished: Bool?
+    let fraction: Double?
+    let imageIndex: Int?
+    let imageCount: Int?
 }
 
 final class MediaEngine: @unchecked Sendable {

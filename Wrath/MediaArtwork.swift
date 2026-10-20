@@ -6,15 +6,6 @@ private struct ArtworkRequest: Hashable {
     let maxPixelSize: Int
 }
 
-struct Thumbnail: View {
-    let url: URL?
-    let kind: MediaKind
-    var body: some View {
-        MediaArtwork(url: url, kind: kind)
-            .frame(width: 64, height: 64).clipShape(RoundedRectangle(cornerRadius: 14))
-    }
-}
-
 struct MediaArtwork: View {
     let url: URL?
     let kind: MediaKind
@@ -28,7 +19,9 @@ struct MediaArtwork: View {
                 if let image {
                     Image(uiImage: image).resizable().scaledToFill()
                 } else {
-                    Image(systemName: kind == .audio ? "waveform" : "play.fill").foregroundStyle(.secondary)
+                    Image(
+                        systemName: kind == .images ? "photo.on.rectangle" : kind == .audio ? "waveform" : "play.fill"
+                    ).foregroundStyle(.secondary)
                 }
             }.clipped().accessibilityHidden(true)
             .task(id: ArtworkRequest(url: url, maxPixelSize: maxPixelSize)) {

@@ -12,7 +12,7 @@ struct SettingsView: View {
             Form {
                 Section("Downloads") {
                     Picker("Default format", selection: $store.kind) {
-                        ForEach(MediaKind.allCases, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
+                        ForEach([MediaKind.video, .audio], id: \.self) { Text($0.rawValue.capitalized).tag($0) }
                     }
                 }
                 Section {
@@ -20,6 +20,11 @@ struct SettingsView: View {
                         SocialAccessSettingsView()
                     } label: {
                         Label("Cookies", systemImage: "person.crop.circle.badge.checkmark")
+                    }
+                    NavigationLink {
+                        AppLockSettingsView()
+                    } label: {
+                        Label("App Lock", systemImage: "lock")
                     }
                     NavigationLink {
                         StorageSettingsView(store: store)
@@ -67,7 +72,7 @@ private struct StorageSettingsView: View {
                     ProgressView("Measuring storage…")
                 }
             } footer: {
-                Text("Find saved files in Files › Wrath.")
+                Text("Saved files are in Files › Wrath.")
             }
             Section {
                 Button {
@@ -82,7 +87,7 @@ private struct StorageSettingsView: View {
                     }
                 }.disabled(store.clearingCache)
             } footer: {
-                Text("Keeps saved files and active downloads.")
+                Text("Saved files and active downloads are kept.")
             }
         }.navigationTitle("Storage").navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -122,6 +127,7 @@ private struct AboutSettingsView: View {
             Section("Components") {
                 LabeledContent("yt-dlp", value: "2026.08.19")
                 LabeledContent("FFmpeg", value: String(cString: wrath_ffmpeg_version()))
+                LabeledContent("gallery-dl", value: "1.32.17")
             }
             Section {
                 NavigationLink("Open-source licenses") { LicenseView().navigationBarTitleDisplayMode(.inline) }
@@ -135,22 +141,23 @@ private struct DownloadHelpView: View {
     var body: some View {
         Form {
             Section("Options") {
-                Text(
-                    "Choose quality, codecs, thumbnails, and subtitles when adding a link. Wrath remembers your choices and adjusts them to the available tracks."
-                )
+                Text("Choose quality and media options after checking a link. Choices adjust to available tracks.")
             }
             Section("Downloads") {
-                Text("Wrath downloads one link at a time. Add another after the current download finishes.")
+                Text("One active download at a time.")
+            }
+            Section("Photo galleries") {
+                Text("Paste a post, album, or image link. Up to 200 images; profiles and feeds aren't supported.")
             }
             Section("Background downloads") {
-                Text(
-                    "Keep Wrath open for long downloads. iOS limits background time; if a download is interrupted, add its link again to retry."
-                )
+                if #available(iOS 26, *) {
+                    Text("iOS may pause background work. Force-closing Wrath stops downloads; retry interrupted links.")
+                } else {
+                    Text("Keep Wrath open for long downloads. Retry links interrupted by iOS.")
+                }
             }
             Section("Saved files") {
-                Text(
-                    "Find your downloads in Library or Files › Wrath. Long-press a Library item to share, rename, or delete it."
-                )
+                Text("In Library, long-press a download to share, rename, or delete. Files › Wrath.")
             }
         }.navigationTitle("Download help").navigationBarTitleDisplayMode(.inline)
     }

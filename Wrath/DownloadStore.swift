@@ -74,16 +74,16 @@ import WrathCore
     @ObservationIgnored private var runner: Task<Void, Never>?
     @ObservationIgnored private var token: OperationToken?
     @ObservationIgnored private var pauseControl = DownloadPauseControl()
-    @ObservationIgnored private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+    @ObservationIgnored private var backgroundSession: DownloadBackgroundSession?
     @ObservationIgnored private let persistence = DispatchQueue(label: "Wrath.Persistence", qos: .utility)
     let documents: URL
     private let support: URL
-    private let queueFile: URL
+    private let historyFile: URL
     private let temporary: URL
     private let files: LibraryFiles
     @ObservationIgnored private var probingIDs: Set<UUID> = []
     @ObservationIgnored private var storageRefreshPending = false
-    var library: [JobItem] { items.filter { $0.job.state == .completed }.reversed() }
+    var library: [JobItem] { items.filter { $0.job.state == .completed } }
     var canAddDownload: Bool { !isDownloadOccupied && !clearingCache }
 
     init() {
@@ -92,7 +92,7 @@ import WrathCore
         support = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent(
             "Wrath", isDirectory: true)
         temporary = support.appendingPathComponent("Working", isDirectory: true)
-        queueFile = support.appendingPathComponent("queue.json")
+        historyFile = support.appendingPathComponent("queue.json")
         files = LibraryFiles(documents: documents, support: support)
         kind = MediaKind(rawValue: UserDefaults.standard.string(forKey: "kind") ?? "video") ?? .video
         quality = Quality(rawValue: UserDefaults.standard.object(forKey: "quality") as? Int ?? 1080) ?? .fullHD
@@ -106,25 +106,15 @@ import WrathCore
         do {
             try fm.createDirectory(at: support, withIntermediateDirectories: true)
             try fm.createDirectory(at: documents, withIntermediateDirectories: true)
-            if fm.fileExists(atPath: queueFile.path) {
-                var jobs = try JSONDecoder().decode([DownloadJob].self, from: Data(contentsOf: queueFile))
-                for i in jobs.indices {
-                    if jobs[i].state.isActive {
-                        jobs[i].state = .failed
-                        jobs[i].error = "Interrupted when the app closed. Retry to refresh the media link."
-                    }
-                    if jobs[i].state == .completed, let name = jobs[i].filename,
-                        name != (name as NSString).lastPathComponent
-                            || !fm.fileExists(atPath: documents.appendingPathComponent(name).path)
-                    {
-                        jobs[i].state = .failed
-                        jobs[i].filename = nil
-                        jobs[i].error = "The saved file was moved or deleted."
-                    }
-                }
-                // Older versions stored pending and failed jobs in the queue.
-                // Keep only completed files when upgrading to single-download mode.
-                items = jobs.filter { $0.state == .completed }.map(JobItem.init)
+            if fm.fileExists(atPath: historyFile.path) {
+                let jobs = try JSONDecoder().decode([DownloadJob].self, from: Data(contentsOf: historyFile))
+                // Discard legacy pending/failed records and missing saved files.
+                items = jobs.filter { job in
+                    guard job.state == .completed else { return false }
+                    guard let name = job.filename else { return true }
+                    return name == (name as NSString).lastPathComponent
+                        && fm.fileExists(atPath: documents.appendingPathComponent(name).path)
+                }.map(JobItem.init)
                 if items.count != jobs.count { save() }
             }
             if fm.fileExists(atPath: temporary.path) { try fm.removeItem(at: temporary) }
@@ -143,7 +133,8 @@ import WrathCore
         failedSocialLink = nil
         let captured = (availability?.optionsForDownload(options, kind: kind, quality: quality) ?? options).forSource(
             url)
-        var job = DownloadJob(url: url, kind: kind, quality: quality, options: captured)
+        var job = DownloadJob(
+            url: url, kind: availability?.gallery != nil ? .images : kind, quality: quality, options: captured)
         job.codecAvailability = availability
         job.state = .resolving
         let item = JobItem(job)
@@ -165,10 +156,10 @@ import WrathCore
         token?.setPaused(item.isPaused)
     }
     func cancel(_ item: JobItem) {
-        if item.job.state.isActive {
-            token?.cancel()
-            runner?.cancel()
-        }
+        guard item.job.state.isActive else { return }
+        token?.cancel()
+        runner?.cancel()
+        backgroundSession?.finish(success: false)
         item.job.state = .cancelled
         item.isPaused = false
         item.speed = 0
@@ -181,9 +172,9 @@ import WrathCore
         libraryBusyIDs.insert(item.id)
         defer { libraryBusyIDs.remove(item.id) }
         do {
-            let name = try await files.rename(original, stem: stem)
+            let name = try await files.rename(original, stem: stem, isGallery: item.job.kind == .images)
             item.job.filename = name
-            item.job.title = (name as NSString).deletingPathExtension
+            item.job.title = item.job.kind == .images ? name : (name as NSString).deletingPathExtension
             save()
             Task { await refreshStorage() }
             return nil
@@ -196,7 +187,9 @@ import WrathCore
         let busy = Set(candidates.map(\.id))
         libraryBusyIDs.formUnion(busy)
         defer { libraryBusyIDs.subtract(busy) }
-        let report = await files.delete(candidates.compactMap(\.job.filename))
+        let report = await files.delete(
+            candidates.compactMap(\.job.filename),
+            galleries: Set(candidates.filter { $0.job.kind == .images }.compactMap(\.job.filename)))
         let removed = Set(candidates.filter { report.deleted.contains($0.job.filename!) }.map(\.id))
         items.removeAll { removed.contains($0.id) }
         save()
@@ -232,7 +225,7 @@ import WrathCore
         await refreshStorage()
     }
     func loadFileDetails(_ item: JobItem) async {
-        guard item.job.state == .completed, item.job.savedMediaInfo == nil,
+        guard item.job.kind != .images, item.job.state == .completed, item.job.savedMediaInfo == nil,
             let file = fileURL(item), !probingIDs.contains(item.id)
         else { return }
         probingIDs.insert(item.id)
@@ -250,7 +243,7 @@ import WrathCore
     }
     private func save() {
         let snapshot = items.map(\.job)
-        let file = queueFile
+        let file = historyFile
         persistence.async { [weak self] in
             do { try JSONEncoder().encode(snapshot).write(to: file, options: .atomic) } catch {
                 Task { @MainActor in self?.message = "Could not save download history: \(error.localizedDescription)" }
@@ -264,39 +257,24 @@ import WrathCore
         self.token = token
         runner = Task { await run(item, token: token) }
     }
+    func redactSystemProgress() { backgroundSession?.redactMediaDetails() }
     private func run(_ item: JobItem, token: OperationToken) async {
-        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Finish media download") { [weak self] in
-            Task { @MainActor in
-                guard let self else { return }
-                self.token?.cancel()
-                self.runner?.cancel()
-                if item.job.state.isActive {
-                    item.job.state = .failed
-                    item.job.error = "iOS ended background time. Add the link again to retry."
-                    self.message = item.job.error
-                    self.save()
-                }
-                if self.backgroundTask != .invalid {
-                    UIApplication.shared.endBackgroundTask(self.backgroundTask)
-                    self.backgroundTask = .invalid
-                }
-            }
-        }
+        let background = DownloadBackgroundSession()
+        backgroundSession = background
         let directory = temporary.appendingPathComponent(item.id.uuidString, isDirectory: true)
-        defer {
-            item.isPaused = false
-            try? FileManager.default.removeItem(at: directory)
-            if backgroundTask != .invalid {
-                UIApplication.shared.endBackgroundTask(backgroundTask)
-                backgroundTask = .invalid
-            }
-            self.token = nil
-            runner = nil
-            if item.job.state != .completed { items.removeAll { $0.id == item.id } }
-            isDownloadOccupied = false
-            save()
-        }
         do {
+            let notice = try await background.begin(id: item.id, title: item.job.title) { [weak self, weak item] in
+                guard let self, let item, item.job.state.isActive else { return }
+                token.cancel()
+                self.runner?.cancel()
+                item.job.state = .failed
+                item.job.error =
+                    "Background download stopped by iOS or cancelled from system progress. Add the link again to retry."
+                self.message = item.job.error
+                self.save()
+            }
+            try Task.checkCancellation()
+            item.backgroundNotice = notice
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
             item.job.state = .resolving
             item.preparationLabel = "Finding media"
@@ -306,6 +284,12 @@ import WrathCore
                 while !Task.isCancelled {
                     do { try await Task.sleep(for: .milliseconds(250)) } catch { break }
                     progress?.refresh()
+                    background.update(
+                        BackgroundDownloadProgress(
+                            title: item.job.title, state: item.job.state, fraction: item.progress,
+                            known: item.progressKnown, phase: item.phase, paused: item.isPaused,
+                            receivedBytes: item.receivedBytes, speed: item.speed, eta: item.eta,
+                            hideDetails: AppLockServices.controller.isEnabled))
                 }
             }
             defer { ticker.cancel() }
@@ -320,7 +304,13 @@ import WrathCore
                     item.job.thumbnail = plan.thumbnail
                     item.job.state = .downloading
                     item.isStreaming = false
-                    progress = JobTransferProgress(item: item, tracks: plan.tracks)
+                    if item.job.kind != .images { progress = JobTransferProgress(item: item, tracks: plan.tracks) }
+                } else if event.type == "galleryProgress" {
+                    item.receivedBytes = event.bytes ?? item.receivedBytes
+                    item.progress = min(1, max(0, event.fraction ?? 0))
+                    item.progressKnown = true
+                    item.speed = event.speed ?? 0
+                    item.preparationLabel = "Image \(event.imageIndex ?? 1) of \(event.imageCount ?? 1)"
                 } else if event.type == "progress", let index = event.index {
                     progress?.update(
                         index: index, bytes: event.bytes ?? 0, total: event.total ?? 0,
@@ -328,78 +318,95 @@ import WrathCore
                 }
             }
             try Task.checkCancellation()
-            item.job.sponsorSegmentsFound = plan.sponsorSegments?.count ?? 0
-            item.job.warning = plan.subtitleWarning
-            for warning in plan.warnings ?? [] {
-                item.job.warning = DownloadWarnings.appending(warning, to: item.job.warning)
-            }
-            try await pauseControl.wait()
-            item.job.state = .processing
-            item.progress = 0
-            item.progressKnown = false
-            item.phase = .preparing
-            item.speed = 0
-            item.eta = nil
-            save()
-            let options = item.job.effectiveOptions
-            var cover: URL?
-            if options.embedThumbnail {
-                item.preparationLabel = "Preparing thumbnail"
-                do {
-                    cover = try await EmbeddedArtwork.shared.prepare(
-                        url: plan.thumbnail, destination: directory.appendingPathComponent("cover.jpg"))
-                } catch {
-                    try Task.checkCancellation()
-                    if error is CancellationError { throw error }
-                    item.job.warning = DownloadWarnings.appending(ArtworkRecovery.warning, to: item.job.warning)
+            if item.job.kind == .images {
+                guard let galleryFiles = plan.galleryFiles else {
+                    throw EngineFailure(message: "The gallery returned no files.")
                 }
-            }
-            // Media bytes are already local; FFmpeg only processes local inputs.
-            let inputs = plan.tracks.map(\.url)
-            let headers = Array(repeating: "", count: inputs.count)
-            let processed = try await ArtworkRecovery.finish(cover: cover) { artwork in
-                let captions = try await SubtitleRecovery.finish(subtitle: plan.subtitle) { subtitle in
-                    let attempt = UUID()
-                    item.processingAttempt = attempt
-                    defer { if item.processingAttempt == attempt { item.processingAttempt = nil } }
-                    return try await MediaEngine.shared.remux(
-                        inputs: inputs, headers: headers, output: directory.appendingPathComponent("finished"),
-                        audioOnly: item.job.kind == .audio, token: token,
-                        cover: artwork, segments: plan.sponsorSegments ?? [], sponsorMode: options.sponsorMode,
-                        subtitle: subtitle
-                    ) { [weak item] phase, progress in
-                        Task { @MainActor in
-                            if let item, item.job.state == .processing, !item.isPaused,
-                                item.processingAttempt == attempt
-                            {
-                                let samePhase = item.phase == phase
-                                item.phase = phase
-                                item.progressKnown = progress != nil
-                                item.progress = progress.map { samePhase ? max(item.progress, $0) : $0 } ?? 0
+                try await pauseControl.wait()
+                item.job.state = .processing
+                item.phase = .saving
+                item.progressKnown = false
+                item.job.warning = plan.warnings?.joined(separator: " · ")
+                let name = try LibraryFiles.publishGallery(
+                    directory.appendingPathComponent("gallery"), files: galleryFiles, to: documents,
+                    title: plan.title, reservedNames: Set(items.compactMap(\.job.filename)))
+                item.job.filename = name
+                item.job.galleryFiles = galleryFiles
+                item.job.bytes = galleryFiles.reduce(0) { $0 + $1.bytes }
+            } else {
+                item.job.sponsorSegmentsFound = plan.sponsorSegments?.count ?? 0
+                item.job.warning = plan.subtitleWarning
+                for warning in plan.warnings ?? [] {
+                    item.job.warning = DownloadWarnings.appending(warning, to: item.job.warning)
+                }
+                try await pauseControl.wait()
+                item.job.state = .processing
+                item.progress = 0
+                item.progressKnown = false
+                item.phase = .preparing
+                item.speed = 0
+                item.eta = nil
+                save()
+                let options = item.job.effectiveOptions
+                var cover: URL?
+                if options.embedThumbnail {
+                    item.preparationLabel = "Preparing thumbnail"
+                    do {
+                        cover = try await EmbeddedArtwork.shared.prepare(
+                            url: plan.thumbnail, destination: directory.appendingPathComponent("cover.jpg"))
+                    } catch {
+                        try Task.checkCancellation()
+                        if error is CancellationError { throw error }
+                        item.job.warning = DownloadWarnings.appending(ArtworkRecovery.warning, to: item.job.warning)
+                    }
+                }
+                // Media bytes are already local; FFmpeg only processes local inputs.
+                let inputs = plan.tracks.map(\.url)
+                let headers = Array(repeating: "", count: inputs.count)
+                let processed = try await ArtworkRecovery.finish(cover: cover) { artwork in
+                    let captions = try await SubtitleRecovery.finish(subtitle: plan.subtitle) { subtitle in
+                        let attempt = UUID()
+                        item.processingAttempt = attempt
+                        defer { if item.processingAttempt == attempt { item.processingAttempt = nil } }
+                        return try await MediaEngine.shared.remux(
+                            inputs: inputs, headers: headers, output: directory.appendingPathComponent("finished"),
+                            audioOnly: item.job.kind == .audio, token: token,
+                            cover: artwork, segments: plan.sponsorSegments ?? [], sponsorMode: options.sponsorMode,
+                            subtitle: subtitle
+                        ) { [weak item] phase, progress in
+                            Task { @MainActor in
+                                if let item, item.job.state == .processing, !item.isPaused,
+                                    item.processingAttempt == attempt
+                                {
+                                    let samePhase = item.phase == phase
+                                    item.phase = phase
+                                    item.progressKnown = progress != nil
+                                    item.progress = progress.map { samePhase ? max(item.progress, $0) : $0 } ?? 0
+                                }
                             }
                         }
                     }
+                    if let warning = captions.warning {
+                        item.job.warning = DownloadWarnings.appending(warning, to: item.job.warning)
+                    }
+                    return captions.url
                 }
-                if let warning = captions.warning {
+                if let warning = processed.warning {
                     item.job.warning = DownloadWarnings.appending(warning, to: item.job.warning)
                 }
-                return captions.url
+                let staged = processed.url
+                try await pauseControl.wait()
+                item.phase = .saving
+                item.progressKnown = false
+                item.job.savedMediaInfo = await MediaEngine.shared.probe(staged, token: token)
+                try Task.checkCancellation()
+                let size = try staged.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+                guard size > 0 else { throw EngineFailure(message: "The processed file is empty.") }
+                let filename = try LibraryFiles.publish(
+                    staged, to: documents, title: plan.title, reservedNames: Set(items.compactMap(\.job.filename)))
+                item.job.filename = filename
+                item.job.bytes = Int64(size)
             }
-            if let warning = processed.warning {
-                item.job.warning = DownloadWarnings.appending(warning, to: item.job.warning)
-            }
-            let staged = processed.url
-            try await pauseControl.wait()
-            item.phase = .saving
-            item.progressKnown = false
-            item.job.savedMediaInfo = await MediaEngine.shared.probe(staged, token: token)
-            try Task.checkCancellation()
-            let size = try staged.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-            guard size > 0 else { throw EngineFailure(message: "The processed file is empty.") }
-            let filename = try LibraryFiles.publish(
-                staged, to: documents, title: plan.title, reservedNames: Set(items.compactMap(\.job.filename)))
-            item.job.filename = filename
-            item.job.bytes = Int64(size)
             item.job.progress = 1
             item.job.completed = Date()
             item.job.state = .completed
@@ -422,5 +429,19 @@ import WrathCore
                 }
             }
         }
+        item.isPaused = false
+        try? FileManager.default.removeItem(at: directory)
+        if item.job.state != .completed { items.removeAll { $0.id == item.id } }
+        save()
+        // Finishing the system task may suspend the app immediately. Wait for
+        // the history write so a background completion survives the next launch.
+        await withCheckedContinuation { continuation in
+            persistence.async { continuation.resume() }
+        }
+        self.token = nil
+        runner = nil
+        isDownloadOccupied = false
+        backgroundSession = nil
+        background.finish(success: item.job.state == .completed)
     }
 }

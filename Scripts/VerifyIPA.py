@@ -52,9 +52,17 @@ def verify(path, require_adaptive_icon=False):
         assert info['CFBundleIdentifier'] == 'app.wrath.downloader'
         assert info['MinimumOSVersion'] == MINIMUM_IOS
         assert info['WrathBuildVariant'] == VARIANT
+        assert not info.get('CFBundleURLTypes'), 'Unexpected incoming URL automation'
+        assert not any(n.startswith(base + folder) for n in names
+                       for folder in ['PlugIns/', 'Metadata.appintents/', 'Shortcuts/']), 'Unexpected automation assets'
+        assert not any(n.endswith('.shortcut') for n in names), 'Unexpected workflow installer'
         supported = tuple(map(int, MINIMUM_IOS.split('.'))) + (0,)
         assert info['CADisableMinimumFrameDurationOnPhone']
         assert info['UIFileSharingEnabled']
+        assert 'processing' in info.get('UIBackgroundModes', []), 'Missing background processing mode'
+        assert 'app.wrath.downloader.download.*' in info.get('BGTaskSchedulerPermittedIdentifiers', []), 'Missing continued download identifiers'
+        assert info.get('NSFaceIDUsageDescription'), 'Missing Face ID permission description'
+        assert info.get('NSPhotoLibraryAddUsageDescription'), 'Missing photo saving permission description'
         icon = archive.read(base + 'AppIcon.png')
         assert icon.startswith(b'\x89PNG\r\n\x1a\n')
         assert struct.unpack_from('>II', icon, 16) == (1024, 1024), 'App icon must be 1024 square'
@@ -71,7 +79,9 @@ def verify(path, require_adaptive_icon=False):
         assert not any(n.endswith(('.so', '.pyc')) for n in names)
         assert not any('/_CodeSignature/' in n or n.endswith('embedded.mobileprovision') for n in names)
         for required in ['wrath_worker.py', 'packages/yt_dlp/__init__.py', 'packages/yt_dlp_ejs/__init__.py',
-                         'packages/certifi/cacert.pem', 'python/lib/python3.13/encodings/__init__.py',
+                         'packages/certifi/cacert.pem', 'packages/gallery_dl/__init__.py', 'packages/requests/__init__.py',
+                         'packages/urllib3/__init__.py', 'packages/idna/__init__.py', 'packages/charset_normalizer/__init__.py',
+                         'Licenses/gallery_dl-LICENSE.txt', 'python/lib/python3.13/encodings/__init__.py',
                          'python/lib/python3.13/encodings/aliases.py', 'python/lib/python3.13/_apple_support.py',
                          'python/lib/python3.13/_ios_support.py', 'python/lib/python3.13/ctypes/__init__.py',
                          'Frameworks/Python.framework/Python', 'Frameworks/_ssl.framework/_ssl',

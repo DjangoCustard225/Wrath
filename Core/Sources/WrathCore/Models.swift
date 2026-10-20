@@ -1,6 +1,30 @@
 import Foundation
 
-public enum MediaKind: String, Codable, CaseIterable, Sendable { case video, audio }
+public enum MediaKind: String, Codable, CaseIterable, Sendable { case video, audio, images }
+
+public struct GalleryInfo: Codable, Equatable, Sendable {
+    public let count: Int
+    public let skippedVideos: Int
+    public init(count: Int, skippedVideos: Int = 0) {
+        self.count = count
+        self.skippedVideos = skippedVideos
+    }
+}
+
+public struct GalleryFile: Codable, Equatable, Sendable, Identifiable {
+    public let filename: String
+    public let bytes: Int64
+    public var id: String { filename }
+    public init(filename: String, bytes: Int64) {
+        self.filename = filename
+        self.bytes = bytes
+    }
+    public var isValid: Bool {
+        filename == (filename as NSString).lastPathComponent && !filename.hasPrefix(".") && bytes > 0
+            && ["jpg", "jpeg", "png", "webp", "gif", "avif", "heic"].contains(
+                (filename as NSString).pathExtension.lowercased())
+    }
+}
 public struct Quality: RawRepresentable, Codable, Hashable, Sendable {
     public let rawValue: Int
     public init?(rawValue: Int) {
@@ -68,6 +92,7 @@ public struct MediaPlan: Codable, Sendable {
     public let subtitle: MediaSubtitle?
     public let subtitleWarning: String?
     public let warnings: [String]?
+    public let galleryFiles: [GalleryFile]?
 }
 public enum JobState: String, Codable, Sendable {
     case queued, resolving, downloading, processing, completed, failed, cancelled
@@ -108,6 +133,7 @@ public struct DownloadJob: Identifiable, Codable, Sendable {
     public var sponsorSegmentsFound: Int?
     public var codecAvailability: CodecAvailability?
     public var savedMediaInfo: SavedMediaInfo?
+    public var galleryFiles: [GalleryFile]?
     public var effectiveOptions: DownloadOptions { (options ?? DownloadOptions()).forSource(sourceURL) }
     public init(url: URL, kind: MediaKind, quality: Quality, options: DownloadOptions = DownloadOptions()) {
         sourceURL = url

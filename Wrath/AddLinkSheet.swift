@@ -5,7 +5,8 @@ import WrathCore
 // Copyright (c) 2026 Ammar Haseeb. MIT license: Resources/Licenses/Quby.txt.
 struct AddLinkSheet: View {
     @Bindable var store: DownloadStore
-    @State var link: String
+    private let initialLink: String
+    @State private var editedLink: String?
     @State private var inspector = LinkInspector()
     @State private var socialAccess = SocialAccessStore.shared
     @State private var keyboardVisible = false
@@ -14,6 +15,18 @@ struct AddLinkSheet: View {
     let added: () -> Void
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focused: Bool
+
+    init(store: DownloadStore, link: String, added: @escaping () -> Void) {
+        self.store = store
+        initialLink = link
+        self.added = added
+    }
+
+    private var link: String {
+        get { editedLink ?? initialLink }
+        nonmutating set { editedLink = newValue }
+    }
+
     private var validURL: URL? { LinkInput.parse(link) }
     private var socialSite: SocialPlatform? {
         validURL.flatMap(SocialPlatform.forURL).flatMap { $0.supportsCookies ? $0 : nil }
@@ -22,6 +35,7 @@ struct AddLinkSheet: View {
     private var availability: CodecAvailability? { inspector.sourceURL == validURL ? inspector.availability : nil }
     private var invalidOptions: Bool {
         guard let availability else { return false }
+        if availability.gallery != nil { return false }
         return !availability.supports(kind: store.kind, quality: store.quality, options: store.options)
             || (isYouTube && store.options.sponsorMode != .off && store.options.sponsorCategories.isEmpty)
     }
@@ -61,6 +75,9 @@ struct AddLinkSheet: View {
             await inspector.inspect(
                 validURL,
                 context: socialSite != nil ? socialAccess.revision : nil)
+            guard !Task.isCancelled else { return }
+            resolveOptions()
+            continueToOptions()
         }
         .sheet(item: $loginSite) { site in
             SocialLoginView(site: site)
@@ -72,10 +89,6 @@ struct AddLinkSheet: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: UIResponder.keyboardDidHideNotification)) { _ in
             keyboardVisible = false
-        }
-        .onChange(of: inspector.availability) { _, _ in
-            resolveOptions()
-            continueToOptions()
         }
         .onChange(of: validURL) { _, _ in showingOptions = false }
         .onChange(of: store.kind) { _, _ in resolveOptions() }
@@ -95,10 +108,30 @@ struct AddLinkSheet: View {
     private var downloadPage: some View {
         page {
             if let availability, !availability.mediaKinds.isEmpty {
-                SourcePreview(availability: availability, kind: store.kind)
+                SourcePreview(availability: availability, kind: availability.gallery == nil ? store.kind : .images)
                     .modifier(MediaCardStyle(padding: 12))
-                formatCard(availability)
-                optionsCard(availability)
+                if let gallery = availability.gallery {
+                    DetailCardSection(title: "Photos") {
+                        VStack(alignment: .leading, spacing: 14) {
+                            LabeledContent("Images", value: String(gallery.count))
+                            Divider()
+                            LabeledContent("Quality", value: "Original")
+                            Divider()
+                            Text("Saved together as one gallery in Library. Size is available after downloading.")
+                                .font(.footnote).foregroundStyle(.secondary)
+                            if gallery.skippedVideos > 0 {
+                                Divider()
+                                Text(
+                                    "This downloads images only. Video or unsupported linked attachments are not included."
+                                )
+                                .font(.footnote).foregroundStyle(.secondary)
+                            }
+                        }.modifier(MediaCardStyle(padding: 16))
+                    }
+                } else {
+                    formatCard(availability)
+                    optionsCard(availability)
+                }
             }
         }
         .wrathBottomBar { downloadButton }
@@ -128,14 +161,14 @@ struct AddLinkSheet: View {
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 6) {
                     Text("Media link").font(.headline)
-                    Text(validURL?.host() ?? "Video or audio from a link")
+                    Text(validURL?.host() ?? "Video, audio, or photos from a link")
                         .font(.subheadline).foregroundStyle(.secondary)
                         .lineLimit(2).fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer(minLength: 0)
             }
             Divider()
-            TextField("Paste a video or audio link", text: $link, axis: .vertical)
+            TextField("Paste a media link", text: Binding(get: { link }, set: { link = $0 }), axis: .vertical)
                 .font(.subheadline).lineLimit(1...5)
                 .keyboardType(.URL).textContentType(.URL).textInputAutocapitalization(.never)
                 .autocorrectionDisabled().focused($focused).submitLabel(.next).onSubmit(continueToOptions)
@@ -143,11 +176,13 @@ struct AddLinkSheet: View {
             inputStatus.font(.caption)
             if let site = socialSite {
                 Divider()
-                Text(
-                    "Copy the full Reddit post URL from your browser’s address bar, not the Reddit app. Use a link containing /comments/."
-                )
-                .font(.caption).foregroundStyle(.secondary)
-                .accessibilityIdentifier("reddit-browser-link-note")
+                if site == .reddit {
+                    Text(
+                        "Copy the full Reddit post URL from your browser’s address bar, not the Reddit app. Use a link containing /comments/."
+                    )
+                    .font(.caption).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("reddit-browser-link-note")
+                }
                 HStack {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(site.name + " access").font(.subheadline.weight(.medium))
@@ -225,6 +260,7 @@ struct AddLinkSheet: View {
     }
     private func resolveOptions() {
         guard let availability, let firstKind = availability.mediaKinds.first else { return }
+        guard availability.gallery == nil else { return }
         let kind = availability.mediaKinds.contains(store.kind) ? store.kind : firstKind
         let quality = kind == .video ? availability.resolvingQuality(store.quality) : store.quality
         if store.kind != kind { store.kind = kind }

@@ -33,6 +33,15 @@ struct DownloadProgressView: View {
             .padding(.horizontal, 10).padding(.vertical, 6)
             .background(Color.orange.opacity(0.1), in: Capsule())
             content
+            if item.job.kind == .images, item.job.state == .downloading {
+                Text(item.preparationLabel).font(.footnote).foregroundStyle(.secondary)
+            }
+            if let notice = item.backgroundNotice {
+                Label(notice, systemImage: "info.circle")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .accessibilityIdentifier("background-download-notice")
+            }
             if transferring {
                 Button(action: togglePause) {
                     Label(
@@ -198,7 +207,10 @@ extension JobItem {
         return job.title
     }
     var downloadArtwork: URL? { job.thumbnail ?? job.codecAvailability?.thumbnail }
-    var downloadFormat: String { job.kind == .video ? "Video · \(job.quality.label)" : "Audio · Original quality" }
+    var downloadFormat: String {
+        if job.kind == .images { return "Photos · Original quality" }
+        return job.kind == .video ? "Video · \(job.quality.label)" : "Audio · Original quality"
+    }
 }
 
 private struct DownloadMetric: View {

@@ -67,6 +67,7 @@ for (index, name) in ["Debug", "Release"].enumerated() {
         "\(id(12 + index)) = {isa = XCBuildConfiguration; buildSettings = {\(projectSettings)}; name = \(name); };")
     objects.append(
         "\(id(14 + index)) = {isa = XCBuildConfiguration; buildSettings = {\(appSettings)}; name = \(name); };")
+
 }
 try fm.createDirectory(atPath: "Wrath.xcodeproj", withIntermediateDirectories: true)
 let project =
