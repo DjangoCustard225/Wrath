@@ -20,6 +20,8 @@ import yt_dlp
 GALLERY_EXTENSIONS = frozenset(('jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'heic'))
 GALLERY_CACHE = {}
 GALLERY_LIMIT = 200
+GALLERY_IMAGE_LIMIT = 100 * 1024 * 1024
+GALLERY_TOTAL_LIMIT = 2 * 1024 * 1024 * 1024
 
 
 class GalleryLimitError(ValueError):
@@ -220,6 +222,10 @@ def download_gallery(data, context):
                         checkpoint(context)
                         output.write(chunk)
                         received += len(chunk)
+                        if received > GALLERY_IMAGE_LIMIT:
+                            raise ValueError('An image was larger than the 100 MB limit, so the download was stopped.')
+                        if completed_bytes + received > GALLERY_TOTAL_LIMIT:
+                            raise ValueError('This gallery was larger than the 2 GB limit, so the download was stopped.')
                         now = time.monotonic()
                         if now - last_report >= 0.25:
                             fraction = (index + min(0.99, received / total if total > 0 else 0)) / len(catalog['files'])
