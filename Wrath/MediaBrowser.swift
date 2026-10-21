@@ -43,9 +43,9 @@ import WrathCore
         NavigationStack {
             VStack(spacing: 0) {
                 addressBar
-                if let browserError {
+                if let errorMessage = browserError {
                     VStack(spacing: 8) {
-                        Text(browserError).font(.subheadline).foregroundStyle(.secondary)
+                        Text(errorMessage).font(.subheadline).foregroundStyle(.secondary)
                         Button("Reload") {
                             browserError = nil
                             loading = true
