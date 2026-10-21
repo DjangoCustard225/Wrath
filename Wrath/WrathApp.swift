@@ -31,6 +31,7 @@ struct WrathRoot: View {
         TabView(selection: $tab) {
             DownloadsView(
                 store: store, add: { presentation.present(.addLink) },
+                browse: { presentation.present(.browser) },
                 showProgress: showProgress
             )
             .tabItem { Label("Downloads", systemImage: "arrow.down.circle") }.tag(AppTab.downloads)
@@ -63,6 +64,11 @@ struct WrathRoot: View {
                 }
             case .redditLogin:
                 SocialLoginView(site: .reddit)
+            case .browser:
+                MediaBrowserView(store: store) {
+                    tab = .downloads
+                    activeDownloadChanged(activeDownloadID)
+                }
             }
         }
         .onChange(of: activeDownloadID, initial: true) { _, id in activeDownloadChanged(id) }

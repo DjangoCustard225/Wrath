@@ -4,6 +4,7 @@ import WrathCore
 struct DownloadsView: View {
     @Bindable var store: DownloadStore
     let add: () -> Void
+    let browse: () -> Void
     let showProgress: (UUID) -> Void
     var body: some View {
         NavigationStack {
@@ -34,6 +35,15 @@ struct DownloadsView: View {
             .navigationTitle("Wrath")
             .navigationBarTitleDisplayMode(.large)
             .toolbar(.visible, for: .navigationBar)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button(action: browse) {
+                        Label("Browse", systemImage: "safari")
+                    }
+                    .accessibilityLabel("Browse the web")
+                    .accessibilityHint("Open the built-in browser to grab media from a page")
+                }
+            }
         }
     }
 }
