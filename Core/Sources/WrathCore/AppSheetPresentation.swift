@@ -5,12 +5,14 @@ public enum AppSheet: Equatable, Identifiable, Sendable {
     case retryLink(URL)
     case download(UUID)
     case redditLogin
+    case browser
     public var id: String {
         switch self {
         case .addLink: "add-link"
         case .retryLink(let url): "retry-link-" + url.absoluteString
         case .download(let id): "download-" + id.uuidString
         case .redditLogin: "reddit-login"
+        case .browser: "browser"
         }
     }
 }
