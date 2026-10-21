@@ -1,0 +1,59 @@
+name: Build IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      variant:
+        description: Which build variant to produce
+        type: choice
+        options:
+          - both
+          - modern
+          - compatibility
+        default: both
+  push:
+    branches:
+      - feature/browser-media-grabber
+
+jobs:
+  build:
+    name: Build (${{ matrix.variant }})
+    runs-on: macos-26
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [modern, compatibility]
+    env:
+      WRATH_VARIANT: ${{ matrix.variant }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@v4
+
+      - name: Select newest stable Xcode
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Show toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          python3 --version
+
+      - name: Skip variant not requested
+        if: ${{ inputs.variant != '' && inputs.variant != 'both' && inputs.variant != matrix.variant }}
+        run: |
+          echo "Variant '${{ inputs.variant }}' requested; skipping ${{ matrix.variant }}."
+          echo "SKIP_VARIANT=true" >> "$GITHUB_ENV"
+
+      - name: Build IPA
+        if: ${{ env.SKIP_VARIANT != 'true' }}
+        run: python3 Scripts/Build.py
+
+      - name: Upload IPA
+        if: ${{ env.SKIP_VARIANT != 'true' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: Wrath-${{ matrix.variant }}-ipa
+          path: Wrath.ipa
+          if-no-files-found: error
