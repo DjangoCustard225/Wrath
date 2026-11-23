@@ -35,7 +35,7 @@ objects += [
     "\(id(304)) = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Wrath/Info.plist; sourceTree = SOURCE_ROOT; };",
     "\(id(305)) = {isa = PBXFileReference; explicitFileType = wrapper.application; path = Wrath.app; sourceTree = BUILT_PRODUCTS_DIR; };",
     "\(id(306)) = {isa = PBXBuildFile; productRef = \(id(401)); };",
-    "\(id(307)) = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = Wrath/Resources/wrath_worker.py; sourceTree = SOURCE_ROOT; };",
+    "\(id(307)) = {isa = PBXFileReference; lastKnownFileType = folder; path = Wrath/Resources/wrath_worker; sourceTree = SOURCE_ROOT; };",
     "\(id(308)) = {isa = PBXBuildFile; fileRef = \(id(307)); };",
     "\(id(309)) = {isa = PBXFileReference; lastKnownFileType = folder.iconcomposer.icon; path = AppIcon.icon; sourceTree = SOURCE_ROOT; };",
     "\(id(310)) = {isa = PBXBuildFile; fileRef = \(id(309)); };",

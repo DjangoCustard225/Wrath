@@ -5,6 +5,6 @@ infoPath: Wrath/Info.plist
 iconPath: AppIcon.png
 resources:
   - Wrath/PrivacyInfo.xcprivacy
-  - Wrath/Resources/wrath_worker.py
+  - Wrath/Resources/wrath_worker
   - Wrath/Resources/packages
   - Wrath/Resources/Licenses

@@ -78,7 +78,8 @@ def verify(path, require_adaptive_icon=False):
             assert info['CFBundleIcons']['CFBundlePrimaryIcon']['CFBundleIconName'] == 'AppIcon'
         assert not any(n.endswith(('.so', '.pyc')) for n in names)
         assert not any('/_CodeSignature/' in n or n.endswith('embedded.mobileprovision') for n in names)
-        for required in ['wrath_worker.py', 'packages/yt_dlp/__init__.py', 'packages/yt_dlp_ejs/__init__.py',
+        for required in ['wrath_worker/__init__.py', 'wrath_worker/gallery.py',
+                         'packages/yt_dlp/__init__.py', 'packages/yt_dlp_ejs/__init__.py',
                          'packages/certifi/cacert.pem', 'packages/gallery_dl/__init__.py', 'packages/requests/__init__.py',
                          'packages/urllib3/__init__.py', 'packages/idna/__init__.py', 'packages/charset_normalizer/__init__.py',
                          'Licenses/gallery_dl-LICENSE.txt', 'python/lib/python3.13/encodings/__init__.py',
