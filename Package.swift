@@ -25,5 +25,5 @@ let package = Package(
             path: "Wrath", exclude: ["Info.plist", "Resources", "PrivacyInfo.xcprivacy"],
             swiftSettings: variantSettings
         ),
-    ], swiftLanguageModes: [.v5]
+    ], swiftLanguageModes: [.v6]
 )

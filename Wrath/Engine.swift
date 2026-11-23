@@ -64,7 +64,7 @@ final class MediaEngine: @unchecked Sendable {
         t.start()
         return t
     }()
-    private func perform<T>(_ operation: @escaping () throws -> T) async throws -> T {
+    private func perform<T: Sendable>(_ operation: @escaping @Sendable () throws -> T) async throws -> T {
         try await withCheckedThrowingContinuation { continuation in
             _ = thread
             condition.lock()
@@ -75,10 +75,12 @@ final class MediaEngine: @unchecked Sendable {
             condition.unlock()
         }
     }
-    private func process<T>(_ operation: @escaping () throws -> T) async throws -> T {
+    private func process<T: Sendable>(_ operation: @escaping @Sendable () throws -> T) async throws -> T {
         try await dispatch(on: processingQueue, operation: operation)
     }
-    private func dispatch<T>(on queue: DispatchQueue, operation: @escaping () throws -> T) async throws -> T {
+    private func dispatch<T: Sendable>(on queue: DispatchQueue, operation: @escaping @Sendable () throws -> T)
+        async throws -> T
+    {
         try await withCheckedThrowingContinuation { continuation in
             queue.async {
                 autoreleasepool {
@@ -227,7 +229,11 @@ final class MediaEngine: @unchecked Sendable {
             throw EngineFailure(message: "Media processing needs one or two inputs.")
         }
         let second = inputs.dropFirst().first
-        func location(_ url: URL) -> String { url.isFileURL ? url.path : url.absoluteString }
+        @Sendable func location(_ url: URL) -> String { url.isFileURL ? url.path : url.absoluteString }
+        /// Reads a NUL-terminated C string the bridge wrote into a fixed buffer.
+        @Sendable func text(_ buffer: [CChar]) -> String {
+            String(decoding: buffer.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }, as: UTF8.self)
+        }
         return try await process {
             final class Reporter {
                 let callback: @Sendable (ProcessingPhase, Double?) -> Void
@@ -266,8 +272,8 @@ final class MediaEngine: @unchecked Sendable {
                 }
             }
             withExtendedLifetime(reporter) {}
-            if result < 0 { throw EngineFailure(message: String(cString: error)) }
-            return output.appendingPathExtension(String(cString: ext))
+            if result < 0 { throw EngineFailure(message: text(error)) }
+            return output.appendingPathExtension(text(ext))
         }
     }
 }

@@ -6,7 +6,9 @@ public enum SubtitleRecovery {
         public let url: URL
         public let warning: String?
     }
-    public static func finish(subtitle: MediaSubtitle?, process: (MediaSubtitle?) async throws -> URL) async throws
+    nonisolated(nonsending) public static func finish(
+        subtitle: MediaSubtitle?, process: (MediaSubtitle?) async throws -> URL
+    ) async throws
         -> Output
     {
         try Task.checkCancellation()

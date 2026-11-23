@@ -234,7 +234,7 @@ extension SocialPlatform {
         }
         func webView(
             _ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
-            decisionHandler: @escaping (WKNavigationActionPolicy) -> Void
+            decisionHandler: @escaping @MainActor @Sendable (WKNavigationActionPolicy) -> Void
         ) {
             // Prevent unknown/custom schemes from leaving the embedded sign-in.
             guard let url = action.request.url,
