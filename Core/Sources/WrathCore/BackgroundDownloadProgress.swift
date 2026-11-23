@@ -64,4 +64,14 @@ public struct BackgroundDownloadProgress: Equatable, Sendable {
             completed = 0
         }
     }
+
+    /// iOS expires continued processing tasks whose progress looks stalled, but
+    /// merging, embedding artwork and saving report no progress. Each stalled
+    /// heartbeat moves the count forward a little without ever finishing it.
+    public static func heartbeat(completed: Int64, total: Int64) -> Int64 {
+        guard total > 0 else { return completed + 1 }
+        guard completed < total - 1 else { return completed }
+        let step = max(1, (total - completed) / 50)
+        return min(total - 1, completed + step)
+    }
 }

@@ -1,8 +1,8 @@
 {
   "yt-dlp": {
-    "version": "2026.8.19",
-    "url": "https://files.pythonhosted.org/packages/69/b2/8cd1613f56eed7ceb64fbd4df3f1c01246bfb098e6f398228bafda22b80b/yt_dlp-2026.8.19-py3-none-any.whl",
-    "sha256": "1d57897e94c6665a0a6f9bc54b34e584284e32c034ffab3a7df25d8f7b24eedf"
+    "version": "2026.10.26",
+    "url": "https://files.pythonhosted.org/packages/7f/3d/16ea7d5638cf585991f2c5705e8083688dde633d32d0871f2404e0f4d827/yt_dlp-2026.10.26-py3-none-any.whl",
+    "sha256": "a05c5b5d8562f7e8a62f5334348b406af4930d56d3a65f8021d14af0e22339ae"
   },
   "yt-dlp-ejs": {
     "version": "0.8.0",
@@ -10,14 +10,14 @@
     "sha256": "79300e5fca7f937a1eeede11f0456862c1b41107ce1d726871e0207424f4bdb4"
   },
   "certifi": {
-    "version": "2026.7.22",
-    "url": "https://files.pythonhosted.org/packages/0b/a7/71ac2cff56fec219ed242bb11b8efb69fcc4bec75db06fb7bfe35de520e6/certifi-2026.7.22-py3-none-any.whl",
-    "sha256": "62f22742b58a1a33014a2b6b706588a8d7e2a88ae7bd1a6ebe8c992928483775"
+    "version": "2026.11.20",
+    "url": "https://files.pythonhosted.org/packages/6d/39/5eec3296860b94ac20bb8ed807725b88f6adfab3f343df592afd975f5f86/certifi-2026.11.20-py3-none-any.whl",
+    "sha256": "7422df25243767b9877031a2248cb14d09ddac9beee846f4cef3d5c9191d488f"
   },
   "gallery-dl": {
-    "version": "1.32.17",
-    "url": "https://files.pythonhosted.org/packages/50/2f/10d3f717e3dc38688ce07424652d7e6c5f606d8b7644af4c16e0dc016527/gallery_dl-1.32.17-py3-none-any.whl",
-    "sha256": "f88ddeb788506f33385e541dbbfba57376ed04bbf6f3f635249a9dd3a78930ed"
+    "version": "1.32.21",
+    "url": "https://files.pythonhosted.org/packages/80/e3/889fb3ac6dabd28ff432763e0414ddb7d0d6a3b38df88d6e602e185548c8/gallery_dl-1.32.21-py3-none-any.whl",
+    "sha256": "f3f3e62bf3863cae6e1635045748c50fc51d52c111ca64b068d618e9334e8811"
   },
   "requests": {
     "version": "2.34.2",

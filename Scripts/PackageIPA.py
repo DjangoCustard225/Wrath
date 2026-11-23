@@ -12,7 +12,7 @@ from Prepare import ROOT
 from VerifyIPA import verify
 
 PYTHON_VERSION = '3.13'
-PYTHON_RELEASE = '3.13.14'
+PYTHON_RELEASE = '3.13.18'
 
 
 def install_python(app):

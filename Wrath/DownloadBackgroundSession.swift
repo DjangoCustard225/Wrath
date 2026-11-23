@@ -15,6 +15,8 @@ import WrathCore
     private var finished = false
     private var latest: BackgroundDownloadProgress?
     private var lastUpdate: TimeInterval = 0
+    private var lastAdvance: TimeInterval = 0
+    private static let heartbeatInterval: TimeInterval = 3
 
     /// Returns a user-facing notice only when iOS 26 declines continued work.
     func begin(id: UUID, title: String, onExpiration: @escaping () -> Void) async throws -> String? {
@@ -41,8 +43,15 @@ import WrathCore
         let title = "Wrath download"
         // Exact, unique registrations avoid duplicate-handler crashes and stale
         // callbacks being attached to a later download. Continued tasks may be
-        // registered after app launch; Info.plist permits this identifier family.
-        let name = "app.wrath.downloader.download.\(id.uuidString)"
+        // registered after app launch; Info.plist must permit this identifier family.
+        // The prefix follows the running bundle identifier, which sideloading
+        // tools may have changed.
+        let name = BackgroundTaskSetup.prefix + id.uuidString
+        guard BackgroundTaskSetup.permits(name) else {
+            // Registering an identifier Info.plist does not permit raises an exception.
+            useForegroundFallback(notice: BackgroundTaskSetup.unpermittedNotice)
+            return
+        }
         identifier = name
         let scheduler = BGTaskScheduler.shared
         guard
@@ -64,6 +73,7 @@ import WrathCore
                         }
                         task.progress.totalUnitCount = -1
                         task.progress.completedUnitCount = 0
+                        self.lastAdvance = ProcessInfo.processInfo.systemUptime
                         let continuation = self.waiting
                         self.waiting = nil
                         continuation?.resume(returning: nil)
@@ -109,7 +119,9 @@ import WrathCore
         }
     }
 
-    private func useForegroundFallback() {
+    private func useForegroundFallback(
+        notice: String = "Background downloading is unavailable. Keep Wrath open for this download."
+    ) {
         guard !finished, waiting != nil else { return }
         launchTimeout?.cancel()
         launchTimeout = nil
@@ -118,7 +130,7 @@ import WrathCore
         beginLimitedTime()
         let continuation = waiting
         waiting = nil
-        continuation?.resume(returning: "Background downloading is unavailable. Keep Wrath open for this download.")
+        continuation?.resume(returning: notice)
     }
 
     private func beginLimitedTime() {
@@ -142,7 +154,12 @@ import WrathCore
         let now = ProcessInfo.processInfo.systemUptime
         guard latest == nil || now - lastUpdate >= 0.5 else { return }
         let sameScale = latest?.total == snapshot.total
-        let completed = sameScale ? max(task.progress.completedUnitCount, snapshot.completed) : snapshot.completed
+        let previous = task.progress.completedUnitCount
+        var completed = sameScale ? max(previous, snapshot.completed) : snapshot.completed
+        if sameScale, completed <= previous, now - lastAdvance >= Self.heartbeatInterval {
+            completed = BackgroundDownloadProgress.heartbeat(completed: previous, total: snapshot.total)
+        }
+        if !sameScale || completed > previous { lastAdvance = now }
         // Reset bytes before switching to a bounded work-unit total. Otherwise
         // observers can briefly see >100% and treat an unfinished task as done.
         if !sameScale { task.progress.completedUnitCount = 0 }

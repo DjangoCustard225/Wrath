@@ -11,10 +11,10 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 CACHE = Path(os.environ.get('WRATH_DEPENDENCY_CACHE', '/tmp/wrath-dependencies'))
-PYTHON_URL = 'https://github.com/beeware/Python-Apple-support/releases/download/3.13-b14/Python-3.13-iOS-support.b14.tar.gz'
-PYTHON_SHA = '8b5cb76ef8d8a2946052479358eeec9d54b4496cb60920e175ec1489b5cf7963'
-FFMPEG_URL = 'https://codeload.github.com/superuser404notfound/FFmpegBuild/tar.gz/refs/tags/3.7.1'
-FFMPEG_SHA = '425e850da64fd077cbae6cfa6505398198ea8819fba25608e71263ad21eaa098'
+PYTHON_URL = 'https://github.com/beeware/Python-Apple-support/releases/download/3.13-b18/Python-3.13-iOS-support.b18.tar.gz'
+PYTHON_SHA = 'd06acf2a9c7964a8689566353a0e707402eff822037de5e29ba0e16040f7047d'
+FFMPEG_URL = 'https://codeload.github.com/superuser404notfound/FFmpegBuild/tar.gz/refs/tags/3.19.0'
+FFMPEG_SHA = '87d15f2b9cb932e4f13aa5789007ff28e93c9680fefcd006814e3b36ccf213b7'
 
 
 def download(url, sha, filename):

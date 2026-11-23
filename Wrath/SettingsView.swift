@@ -15,6 +15,17 @@ struct SettingsView: View {
                         ForEach([MediaKind.video, .audio], id: \.self) { Text($0.rawValue.capitalized).tag($0) }
                     }
                 }
+                if BackgroundTaskSetup.needsFix {
+                    Section {
+                        NavigationLink {
+                            BackgroundDownloadFixView()
+                        } label: {
+                            Label("Background Downloads", systemImage: "exclamationmark.triangle")
+                        }
+                    } footer: {
+                        Text("Downloads stop when you leave Wrath until this is fixed.")
+                    }
+                }
                 Section {
                     NavigationLink {
                         SocialAccessSettingsView()
@@ -51,6 +62,61 @@ struct SettingsView: View {
                 }
             }.navigationTitle("Settings")
                 .task { await store.refreshStorage() }
+        }
+    }
+}
+
+private struct BackgroundDownloadFixView: View {
+    @State private var exporting = false
+    @State private var exported: URL?
+    @State private var failure: String?
+    var body: some View {
+        Form {
+            Section {
+                Text(
+                    "Your sideloading tool changed Wrath's bundle ID to \(Bundle.main.bundleIdentifier ?? "an unknown ID"), so iOS won't let downloads continue in the background."
+                )
+            } footer: {
+                Text(
+                    "Export a fixed copy of this version, then install it with the same sideloading tool, replacing the current app. Your Library and settings are kept."
+                )
+            }
+            Section {
+                if let exported {
+                    ShareLink(item: exported) { Label("Share Wrath.ipa", systemImage: "square.and.arrow.up") }
+                } else {
+                    Button {
+                        export()
+                    } label: {
+                        HStack {
+                            Text(exporting ? "Exporting…" : "Export Fixed Copy")
+                            if exporting {
+                                Spacer()
+                                ProgressView().controlSize(.small)
+                            }
+                        }
+                    }.disabled(exporting)
+                }
+            } footer: {
+                if let failure { Text(failure).foregroundStyle(.red) }
+            }
+        }.navigationTitle("Background Downloads").navigationBarTitleDisplayMode(.inline)
+    }
+
+    private func export() {
+        exporting = true
+        failure = nil
+        let running = Bundle.main.bundleIdentifier ?? BackgroundTaskIdentity.originalBundleIdentifier
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("Fixed App", isDirectory: true)
+        Task {
+            let result = await Task.detached(priority: .userInitiated) {
+                Result { try BackgroundTaskSetup.exportFixedApp(running: running, to: directory) }
+            }.value
+            exporting = false
+            switch result {
+            case .success(let url): exported = url
+            case .failure(let error): failure = "Could not export the app: \(error.localizedDescription)"
+            }
         }
     }
 }
@@ -125,9 +191,9 @@ private struct AboutSettingsView: View {
                 NavigationLink("Download help") { DownloadHelpView() }
             }
             Section("Components") {
-                LabeledContent("yt-dlp", value: "2026.08.19")
+                LabeledContent("yt-dlp", value: "2026.10.26")
                 LabeledContent("FFmpeg", value: String(cString: wrath_ffmpeg_version()))
-                LabeledContent("gallery-dl", value: "1.32.17")
+                LabeledContent("gallery-dl", value: "1.32.21")
             }
             Section {
                 NavigationLink("Open-source licenses") { LicenseView().navigationBarTitleDisplayMode(.inline) }
