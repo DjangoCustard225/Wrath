@@ -3,6 +3,8 @@ import Foundation
 /// Progress for the entire download, including local processing and publishing.
 /// Unknown transfer sizes stay indeterminate rather than inventing a percentage.
 public struct BackgroundDownloadProgress: Equatable, Sendable {
+    /// Shown instead of the media title while App Lock is on.
+    public static let privateTitle = "Wrath download"
     public let title: String
     public let subtitle: String
     public let total: Int64
@@ -13,7 +15,7 @@ public struct BackgroundDownloadProgress: Equatable, Sendable {
         phase: ProcessingPhase, paused: Bool, receivedBytes: Int64,
         speed: Double = 0, eta: Double? = nil, hideDetails: Bool = false
     ) {
-        self.title = hideDetails ? "Wrath download" : title
+        self.title = hideDetails ? Self.privateTitle : title
         let value = fraction.isFinite ? min(1, max(0, fraction)) : 0
         switch state {
         case .queued, .resolving:

@@ -144,6 +144,10 @@ public struct DownloadJob: Identifiable, Codable, Sendable {
     }
 }
 public enum LinkInput {
+    // A constant, valid pattern, compiled once.
+    private static let sharedLink = try! NSRegularExpression(
+        pattern: #"https?://[^\s<>"']+"#, options: [.caseInsensitive])
+
     public static func parse(_ text: String) -> URL? {
         let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !value.isEmpty else { return nil }
@@ -151,9 +155,8 @@ public enum LinkInput {
         if value.contains(where: { $0.isWhitespace }) {
             // Social apps copy captions + a link (sometimes with trailing punctuation).
             // Don't silently extract arbitrary URLs from an unrelated text message.
-            let regex = try! NSRegularExpression(pattern: #"https?://[^\s<>"']+"#, options: [.caseInsensitive])
             let range = NSRange(value.startIndex..<value.endIndex, in: value)
-            let matches = regex.matches(in: value, range: range)
+            let matches = sharedLink.matches(in: value, range: range)
             guard matches.count == 1, let match = matches.first,
                 let swiftRange = Range(match.range, in: value)
             else { return nil }

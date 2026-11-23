@@ -209,7 +209,7 @@ static char *invoke_worker(const char *root,const char *request,WrathToken *toke
     PyGILState_Release(gil);
     return result;
 }
-char *wrath_extract(const char *root,const char *cache,const char *request,WrathToken *token) {
+char *wrath_extract(const char *root,const char *request,WrathToken *token) {
     return invoke_worker(root,request,token,"extract",NULL,NULL);
 }
 char *wrath_download(const char *root,const char *request,WrathToken *token,WrathEvent callback,void *context) {

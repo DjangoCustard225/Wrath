@@ -11,43 +11,17 @@ import WrathCore
 }
 
 @MainActor struct KeychainAppLockStore: AppLockPersistence {
-    var service = "app.wrath.downloader.app-lock"
-    private var query: [String: Any] {
-        [
-            kSecClass as String: kSecClassGenericPassword,
-            kSecAttrService as String: service,
-            kSecAttrAccount as String: "pin-verifier-v1",
-            kSecAttrSynchronizable as String: false,
-        ]
-    }
+    private let item = KeychainItem(
+        service: "app.wrath.downloader.app-lock", account: "pin-verifier-v1",
+        accessibility: kSecAttrAccessibleWhenUnlockedThisDeviceOnly)
 
     func read() throws -> AppLockRecord? {
-        var request = query
-        request[kSecReturnData as String] = true
-        request[kSecMatchLimit as String] = kSecMatchLimitOne
-        var result: CFTypeRef?
-        let status = SecItemCopyMatching(request as CFDictionary, &result)
-        if status == errSecItemNotFound { return nil }
-        guard status == errSecSuccess, let data = result as? Data else { throw SecurityFailure.unavailable }
-        return try JSONDecoder().decode(AppLockRecord.self, from: data)
+        try item.read().map { try JSONDecoder().decode(AppLockRecord.self, from: $0) }
     }
 
-    func write(_ record: AppLockRecord) throws {
-        let attributes: [String: Any] = [
-            kSecValueData as String: try JSONEncoder().encode(record),
-            kSecAttrAccessible as String: kSecAttrAccessibleWhenUnlockedThisDeviceOnly,
-        ]
-        var status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
-        if status == errSecItemNotFound {
-            status = SecItemAdd(query.merging(attributes) { _, new in new } as CFDictionary, nil)
-        }
-        guard status == errSecSuccess else { throw SecurityFailure.unavailable }
-    }
+    func write(_ record: AppLockRecord) throws { try item.write(JSONEncoder().encode(record)) }
 
-    func remove() throws {
-        let status = SecItemDelete(query as CFDictionary)
-        guard status == errSecSuccess || status == errSecItemNotFound else { throw SecurityFailure.unavailable }
-    }
+    func remove() throws { try item.remove() }
 }
 
 struct AppPINHasher: AppPINHashing {
@@ -55,7 +29,8 @@ struct AppPINHasher: AppPINHashing {
         try await Task.detached(priority: .userInitiated) {
             var salt = Data(count: 16)
             let result = salt.withUnsafeMutableBytes { buffer in
-                SecRandomCopyBytes(kSecRandomDefault, buffer.count, buffer.baseAddress!)
+                guard let base = buffer.baseAddress else { return errSecAllocate }
+                return SecRandomCopyBytes(kSecRandomDefault, buffer.count, base)
             }
             guard result == errSecSuccess else { throw SecurityFailure.unavailable }
             return AppPINVerifier(salt: salt, key: try Self.derive(pin, salt: salt, iterations: 600_000))

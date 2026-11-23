@@ -44,24 +44,18 @@ struct DownloadProgressView: View {
             }
             if transferring {
                 Button(action: togglePause) {
-                    Label(
-                        item.isPaused ? "RESUME DOWNLOAD" : "PAUSE DOWNLOAD",
-                        systemImage: item.isPaused ? "play.fill" : "pause.fill"
-                    )
-                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                    .tracking(1.8).frame(maxWidth: .infinity, minHeight: 28)
+                    CapsuleButtonTitle(
+                        title: item.isPaused ? "Resume download" : "Pause download",
+                        systemImage: item.isPaused ? "play.fill" : "pause.fill")
                 }
                 .wrathGlassButton().buttonBorderShape(.capsule).controlSize(.large)
-                .accessibilityLabel(item.isPaused ? "Resume download" : "Pause download")
                 .accessibilityIdentifier("pause-download")
             }
             Button(role: .destructive, action: cancel) {
-                Text("CANCEL DOWNLOAD")
-                    .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                    .tracking(1.8).frame(maxWidth: .infinity, minHeight: 28)
+                CapsuleButtonTitle(title: "Cancel download")
             }
             .wrathGlassButton(clear: true).buttonBorderShape(.capsule).controlSize(.large)
-            .foregroundStyle(.primary).accessibilityLabel("Cancel download")
+            .foregroundStyle(.primary)
             .accessibilityIdentifier("cancel-download")
         }.foregroundStyle(.primary).modifier(MediaCardStyle())
     }
@@ -93,7 +87,7 @@ struct DownloadProgressView: View {
                     }
                 }
                 if item.progressKnown {
-                    ProgressView(value: min(1, max(0, item.progress)))
+                    ProgressView(value: item.clampedProgress)
                         .progressViewStyle(.linear).tint(.orange)
                         .animation(reduceMotion ? nil : .linear(duration: 0.25), value: item.progress)
                         .accessibilityLabel(status + " progress")

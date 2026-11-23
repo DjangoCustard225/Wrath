@@ -5,4 +5,7 @@ let package = Package(
     name: "WrathCore",
     platforms: [.iOS("17.0"), .macOS(.v14)],
     products: [.library(name: "WrathCore", targets: ["WrathCore"])],
-    targets: [.target(name: "WrathCore")])
+    targets: [
+        .target(name: "WrathCore"),
+        .testTarget(name: "WrathCoreTests", dependencies: ["WrathCore"]),
+    ])

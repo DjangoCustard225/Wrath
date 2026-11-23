@@ -10,7 +10,7 @@ struct SourcePreview: View {
                 .aspectRatio(16 / 9, contentMode: .fit)
                 .frame(maxWidth: .infinity).clipShape(RoundedRectangle(cornerRadius: 14))
             VStack(alignment: .leading, spacing: 8) {
-                Text(availability.title?.isEmpty == false ? availability.title! : "Media ready")
+                Text(availability.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Media ready")
                     .font(.headline).fixedSize(horizontal: false, vertical: true)
                 if availability.author?.isEmpty == false || MediaLabels.duration(availability.duration) != nil {
                     Divider()

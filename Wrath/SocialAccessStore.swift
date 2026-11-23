@@ -12,9 +12,9 @@ import WrathCore
     init() {
         for site in SocialPlatform.cookiePlatforms {
             // Discard the removed manual override; only browser-captured identities remain.
-            UserDefaults.standard.removeObject(forKey: "socialUserAgent.\(site.rawValue)")
+            UserDefaults.standard.removeObject(forKey: PreferenceKey.legacySocialUserAgent(site.rawValue))
             browserUserAgents[site] = try? HTTPUserAgent.validated(
-                UserDefaults.standard.string(forKey: "socialBrowserUserAgent.\(site.rawValue)") ?? "")
+                UserDefaults.standard.string(forKey: PreferenceKey.socialBrowserUserAgent(site.rawValue)) ?? "")
             do {
                 if let data = try storage(for: site).read() {
                     cookieCounts[site] = try JSONDecoder().decode(SocialCookies.self, from: data).count
@@ -24,8 +24,8 @@ import WrathCore
             }
         }
     }
-    private func storage(for site: SocialPlatform) -> KeychainCookieStore {
-        KeychainCookieStore(service: "app.wrath.downloader.social.\(site.rawValue)")
+    private func storage(for site: SocialPlatform) -> KeychainItem {
+        KeychainItem(service: "app.wrath.downloader.social.\(site.rawValue)", account: "cookies")
     }
     /// Import directly from a user-initiated first-party WebKit login.
     /// Unrelated identity-provider cookies are filtered before Keychain storage.
@@ -43,7 +43,7 @@ import WrathCore
         // Match the User-Agent that was actually used to sign in. Unsupported
         // or empty browser values do not overwrite the saved browser identity.
         if let userAgent, let validated = try? HTTPUserAgent.validated(userAgent) {
-            UserDefaults.standard.set(validated, forKey: "socialBrowserUserAgent.\(site.rawValue)")
+            UserDefaults.standard.set(validated, forKey: PreferenceKey.socialBrowserUserAgent(site.rawValue))
             browserUserAgents[site] = validated
         }
         revision = UUID()
@@ -56,7 +56,7 @@ import WrathCore
         revision = UUID()
     }
     private func clearBrowserIdentity(for site: SocialPlatform) {
-        UserDefaults.standard.removeObject(forKey: "socialBrowserUserAgent.\(site.rawValue)")
+        UserDefaults.standard.removeObject(forKey: PreferenceKey.socialBrowserUserAgent(site.rawValue))
         browserUserAgents[site] = nil
     }
     func snapshot(for url: URL) throws -> [String: String] {

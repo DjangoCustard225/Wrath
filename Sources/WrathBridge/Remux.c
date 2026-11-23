@@ -53,33 +53,7 @@ static int read_next(Input *input) {
 }
 int wrath_remux(const char *first, const char *first_headers, const char *second,
                 const char *second_headers, const char *output, int audio_only,
-                WrathToken *token, WrathProgress progress, void *context, char *error, int error_size,
-                char *extension, int extension_size) {
-    return wrath_remux_with_options(first,first_headers,second,second_headers,output,audio_only,
-        token,progress,context,error,error_size,extension,extension_size,"",NULL,0,0);
-}
-int wrath_remux_with_options(const char *first, const char *first_headers, const char *second,
-                const char *second_headers, const char *output, int audio_only,
-                WrathToken *token, WrathProgress progress, void *context, char *error, int error_size,
-                char *extension, int extension_size, const char *cover_path,
-                const WrathSegment *segments, int segment_count, int sponsor_mode) {
-    return wrath_remux_with_subtitles(first,first_headers,second,second_headers,output,audio_only,
-        token,progress,context,error,error_size,extension,extension_size,cover_path,segments,segment_count,sponsor_mode,
-        NULL,0,"","");
-}
-int wrath_remux_with_subtitles(const char *first, const char *first_headers, const char *second,
-                const char *second_headers, const char *output, int audio_only,
-                WrathToken *token, WrathProgress progress, void *context, char *error, int error_size,
-                char *extension, int extension_size, const char *cover_path,
-                const WrathSegment *segments, int segment_count, int sponsor_mode,
-                const WrathSubtitleCue *subtitles, int subtitle_count, const char *language, const char *subtitle_name) {
-    return wrath_remux_with_status(first,first_headers,second,second_headers,output,audio_only,
-        token,progress,context,error,error_size,extension,extension_size,cover_path,segments,segment_count,sponsor_mode,
-        subtitles,subtitle_count,language,subtitle_name,NULL);
-}
-int wrath_remux_with_status(const char *first, const char *first_headers, const char *second,
-                const char *second_headers, const char *output, int audio_only,
-                WrathToken *token, WrathProgress progress, void *context, char *error, int error_size,
+                WrathToken *token, void *context, char *error, int error_size,
                 char *extension, int extension_size, const char *cover_path,
                 const WrathSegment *segments, int segment_count, int sponsor_mode,
                 const WrathSubtitleCue *subtitles, int subtitle_count, const char *language, const char *subtitle_name,
@@ -254,9 +228,8 @@ int wrath_remux_with_status(const char *first, const char *first_headers, const 
             if(pkt->pts!=AV_NOPTS_VALUE) pkt->pts-=shift;
             if(pkt->dts!=AV_NOPTS_VALUE) pkt->dts-=shift;
         }
-        if((progress || status) && duration>0 && av_gettime_relative()-last_report>250000) {
-            if(progress) progress(seconds/duration,context);
-            if(status) status(4,seconds/duration,context);
+        if(status && duration>0 && av_gettime_relative()-last_report>250000) {
+            status(4,seconds/duration,context);
             last_report=av_gettime_relative();
         }
         av_packet_rescale_ts(pkt,source->time_base,out->streams[destination_index]->time_base);

@@ -16,12 +16,12 @@ def macho(data):
     if magic == 0xbebafeca:
         count = struct.unpack_from('>I', data, 4)[0]
         for i in range(count):
-            cpu, subtype, offset, size, align = struct.unpack_from('>IIIII', data, 8 + i * 20)
+            cpu, _subtype, offset, size, _align = struct.unpack_from('>IIIII', data, 8 + i * 20)
             if cpu == 0x100000c:
                 return macho(data[offset:offset + size])
         raise AssertionError('No arm64 slice')
     assert magic == 0xfeedfacf, f'Unexpected Mach-O magic: {magic:x}'
-    _, cpu, _, kind, count, _, _, _ = struct.unpack_from('<IIIIIIII', data)
+    _, cpu, _, _kind, count, _, _, _ = struct.unpack_from('<IIIIIIII', data)
     assert cpu == 0x100000c, f'Unexpected CPU: {cpu:x}'
     offset = 32
     dependencies, rpaths = [], []
@@ -94,9 +94,10 @@ def verify(path, require_adaptive_icon=False):
                 framework_info = plistlib.loads(archive.read(name))
                 binary = str(PurePosixPath(name).parent / framework_info['CFBundleExecutable'])
                 assert binary in names, binary
-                binaries.append(binary); frameworks.append(binary)
+                binaries.append(binary)
+                frameworks.append(binary)
         for binary in binaries:
-            dependencies, rpaths, minimum = macho(archive.read(binary))
+            dependencies, _rpaths, minimum = macho(archive.read(binary))
             assert minimum is not None and minimum <= supported, f'{binary}: minimum OS {minimum} exceeds {supported}'
             for dependency in dependencies:
                 if dependency.startswith('@rpath/'):

@@ -7,12 +7,23 @@ struct EngineFailure: LocalizedError {
     var errorDescription: String? { message }
 }
 
+/// Cancellation and pause state shared with the C bridge and the Python worker.
 final class OperationToken: @unchecked Sendable {
-    let pointer = wrath_token_create()!
+    let pointer: OpaquePointer
+    init() {
+        guard let pointer = wrath_token_create() else { fatalError("Could not allocate an operation token.") }
+        self.pointer = pointer
+    }
     var isCancelled: Bool { wrath_is_cancelled(pointer) != 0 }
     func cancel() { wrath_token_cancel(pointer) }
     func setPaused(_ paused: Bool) { wrath_token_set_paused(pointer, paused ? 1 : 0) }
     deinit { wrath_token_free(pointer) }
+}
+
+/// Takes ownership of a JSON string returned by the C bridge, frees it, and decodes it.
+private func decodeBridgeReply<Reply: Decodable>(_ raw: UnsafeMutablePointer<CChar>, as _: Reply.Type) throws -> Reply {
+    defer { wrath_free(raw) }
+    return try JSONDecoder().decode(Reply.self, from: Data(String(cString: raw).utf8))
 }
 
 struct DownloadEvent: Decodable, Sendable {
@@ -119,14 +130,15 @@ final class MediaEngine: @unchecked Sendable {
                                 Unmanaged<Reporter>.fromOpaque(context).takeUnretainedValue().continuation.yield(value)
                             }, context)
                     else { throw EngineFailure(message: "The download engine returned no result.") }
-                    defer { wrath_free(raw) }
                     withExtendedLifetime(reporter) {}
-                    guard !token.isCancelled else { throw CancellationError() }
                     struct Reply: Decodable {
                         let plan: MediaPlan?
                         let error: String?
                     }
-                    let reply = try JSONDecoder().decode(Reply.self, from: Data(String(cString: raw).utf8))
+                    // Decoding frees the bridge's buffer, so it runs even when the result is discarded.
+                    let decoded = Result { try decodeBridgeReply(raw, as: Reply.self) }
+                    guard !token.isCancelled else { throw CancellationError() }
+                    let reply = try decoded.get()
                     guard let plan = reply.plan else { throw EngineFailure(message: reply.error ?? "No media found.") }
                     return plan
                 }
@@ -157,17 +169,17 @@ final class MediaEngine: @unchecked Sendable {
                 let data = try JSONSerialization.data(withJSONObject: request)
                 guard
                     let raw = wrath_extract(
-                        Bundle.main.bundlePath, cache.path, String(decoding: data, as: UTF8.self), token.pointer)
+                        Bundle.main.bundlePath, String(decoding: data, as: UTF8.self), token.pointer)
                 else {
                     throw EngineFailure(message: "Could not check available codecs.")
                 }
-                defer { wrath_free(raw) }
-                guard !token.isCancelled else { throw CancellationError() }
                 struct Reply: Decodable {
                     let availability: CodecAvailability?
                     let error: String?
                 }
-                let reply = try JSONDecoder().decode(Reply.self, from: Data(String(cString: raw).utf8))
+                let decoded = Result { try decodeBridgeReply(raw, as: Reply.self) }
+                guard !token.isCancelled else { throw CancellationError() }
+                let reply = try decoded.get()
                 guard let availability = reply.availability else {
                     throw EngineFailure(message: reply.error ?? "Could not check available codecs.")
                 }
@@ -184,14 +196,13 @@ final class MediaEngine: @unchecked Sendable {
             let token = OperationToken()
             guard
                 let raw = wrath_extract(
-                    Bundle.main.bundlePath, support.path, #"{"operation":"clearInspectionCache"}"#, token.pointer)
+                    Bundle.main.bundlePath, #"{"operation":"clearInspectionCache"}"#, token.pointer)
             else { throw EngineFailure(message: "Could not clear checked media details.") }
-            defer { wrath_free(raw) }
             struct Reply: Decodable {
                 let cleared: Bool?
                 let error: String?
             }
-            let reply = try JSONDecoder().decode(Reply.self, from: Data(String(cString: raw).utf8))
+            let reply = try decodeBridgeReply(raw, as: Reply.self)
             guard reply.cleared == true else {
                 throw EngineFailure(message: reply.error ?? "Could not clear checked media details.")
             }
@@ -202,17 +213,22 @@ final class MediaEngine: @unchecked Sendable {
         guard file.isFileURL else { return nil }
         return try? await dispatch(on: metadataQueue) {
             guard let raw = wrath_probe_media(file.path, token.pointer) else { return nil as SavedMediaInfo? }
-            defer { wrath_free(raw) }
-            return try JSONDecoder().decode(SavedMediaInfo.self, from: Data(String(cString: raw).utf8))
+            return try decodeBridgeReply(raw, as: SavedMediaInfo.self)
         }
     }
+    /// Combines up to two local or remote inputs into `output`, returning the file with its chosen extension.
     func remux(
-        inputs: [URL], headers: [String], output: URL, audioOnly: Bool, token: OperationToken,
+        inputs: [URL], headers: [String] = [], output: URL, audioOnly: Bool, token: OperationToken,
         cover: URL? = nil, segments: [SponsorSegment] = [], sponsorMode: SponsorMode = .off,
         subtitle: MediaSubtitle? = nil,
         progress: @escaping @Sendable (ProcessingPhase, Double?) -> Void
     ) async throws -> URL {
-        try await process {
+        guard let first = inputs.first, inputs.count <= 2 else {
+            throw EngineFailure(message: "Media processing needs one or two inputs.")
+        }
+        let second = inputs.dropFirst().first
+        func location(_ url: URL) -> String { url.isFileURL ? url.path : url.absoluteString }
+        return try await process {
             final class Reporter {
                 let callback: @Sendable (ProcessingPhase, Double?) -> Void
                 init(_ c: @escaping @Sendable (ProcessingPhase, Double?) -> Void) { callback = c }
@@ -233,11 +249,10 @@ final class MediaEngine: @unchecked Sendable {
             }
             let result = nativeSegments.withUnsafeBufferPointer { buffer in
                 nativeCues.withUnsafeBufferPointer { captions in
-                    wrath_remux_with_status(
-                        inputs[0].isFileURL ? inputs[0].path : inputs[0].absoluteString, headers[0],
-                        inputs.count > 1 ? (inputs[1].isFileURL ? inputs[1].path : inputs[1].absoluteString) : "",
-                        headers.count > 1 ? headers[1] : "", output.path, audioOnly ? 1 : 0,
-                        token.pointer, nil, context, &error, Int32(error.count), &ext, Int32(ext.count),
+                    wrath_remux(
+                        location(first), headers.first ?? "", second.map(location) ?? "",
+                        headers.dropFirst().first ?? "", output.path, audioOnly ? 1 : 0,
+                        token.pointer, context, &error, Int32(error.count), &ext, Int32(ext.count),
                         cover?.path ?? "",
                         buffer.baseAddress, Int32(buffer.count),
                         sponsorMode == .remove ? 2 : (sponsorMode == .chapters ? 1 : 0),

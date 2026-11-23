@@ -6,17 +6,23 @@ import WrathCore
 /// One persistent WebKit profile per social service. Cookies in these profiles
 /// are never read from Safari or from other installed applications.
 @MainActor enum SocialLoginBrowserProfile {
-    private static let identifiers: [SocialPlatform: UUID] = [
-        .instagram: UUID(uuidString: "AB550001-1000-4000-8000-000000000001")!,
-        .tiktok: UUID(uuidString: "AB550001-1000-4000-8000-000000000002")!,
-        .facebook: UUID(uuidString: "AB550001-1000-4000-8000-000000000003")!,
-        .x: UUID(uuidString: "AB550001-1000-4000-8000-000000000004")!,
-        .reddit: UUID(uuidString: "AB550001-1000-4000-8000-000000000005")!,
-        .threads: UUID(uuidString: "AB550001-1000-4000-8000-000000000006")!,
-    ]
+    /// Persisted profile identifiers. Changing one discards that site's saved browser session.
+    private static func identifier(for site: SocialPlatform) -> UUID {
+        let suffix: UInt8
+        switch site {
+        case .instagram: suffix = 1
+        case .tiktok: suffix = 2
+        case .facebook: suffix = 3
+        case .x: suffix = 4
+        case .reddit: suffix = 5
+        case .threads: suffix = 6
+        }
+        // AB550001-1000-4000-8000-0000000000NN
+        return UUID(uuid: (0xAB, 0x55, 0x00, 0x01, 0x10, 0x00, 0x40, 0x00, 0x80, 0x00, 0, 0, 0, 0, 0, suffix))
+    }
 
     static func store(for site: SocialPlatform) -> WKWebsiteDataStore {
-        WKWebsiteDataStore(forIdentifier: identifiers[site]!)
+        WKWebsiteDataStore(forIdentifier: identifier(for: site))
     }
 
     static func clear(_ site: SocialPlatform) async {

@@ -57,12 +57,12 @@ import WrathCore
     var message: String?
     /// The failed social link, offered for account reconnect only on access errors.
     var failedSocialLink: URL?
-    var kind: MediaKind { didSet { UserDefaults.standard.set(kind.rawValue, forKey: "kind") } }
-    var quality: Quality { didSet { UserDefaults.standard.set(quality.rawValue, forKey: "quality") } }
+    var kind: MediaKind { didSet { UserDefaults.standard.set(kind.rawValue, forKey: PreferenceKey.mediaKind) } }
+    var quality: Quality { didSet { UserDefaults.standard.set(quality.rawValue, forKey: PreferenceKey.quality) } }
     var options: DownloadOptions {
         didSet {
             if let data = try? JSONEncoder().encode(options) {
-                UserDefaults.standard.set(data, forKey: "downloadOptions")
+                UserDefaults.standard.set(data, forKey: PreferenceKey.downloadOptions)
             }
         }
     }
@@ -75,6 +75,7 @@ import WrathCore
     @ObservationIgnored private var token: OperationToken?
     @ObservationIgnored private var pauseControl = DownloadPauseControl()
     @ObservationIgnored private var backgroundSession: DownloadBackgroundSession?
+    @ObservationIgnored private var activeTransfer: JobTransferProgress?
     @ObservationIgnored private let persistence = DispatchQueue(label: "Wrath.Persistence", qos: .utility)
     let documents: URL
     private let support: URL
@@ -83,7 +84,10 @@ import WrathCore
     private let files: LibraryFiles
     @ObservationIgnored private var probingIDs: Set<UUID> = []
     @ObservationIgnored private var storageRefreshPending = false
+    static let busyMessage = "A download is already in progress. Wait for it to finish before adding another link."
     var library: [JobItem] { items.filter { $0.job.state == .completed } }
+    /// The one download that is resolving, downloading or processing, if any.
+    var activeItem: JobItem? { items.first { $0.job.state.isActive } }
     var canAddDownload: Bool { !isDownloadOccupied && !clearingCache }
 
     init() {
@@ -94,10 +98,11 @@ import WrathCore
         temporary = support.appendingPathComponent("Working", isDirectory: true)
         historyFile = support.appendingPathComponent("queue.json")
         files = LibraryFiles(documents: documents, support: support)
-        kind = MediaKind(rawValue: UserDefaults.standard.string(forKey: "kind") ?? "video") ?? .video
-        quality = Quality(rawValue: UserDefaults.standard.object(forKey: "quality") as? Int ?? 1080) ?? .fullHD
+        kind = MediaKind(rawValue: UserDefaults.standard.string(forKey: PreferenceKey.mediaKind) ?? "video") ?? .video
+        quality =
+            Quality(rawValue: UserDefaults.standard.object(forKey: PreferenceKey.quality) as? Int ?? 1080) ?? .fullHD
         var restoredOptions =
-            UserDefaults.standard.data(forKey: "downloadOptions").flatMap {
+            UserDefaults.standard.data(forKey: PreferenceKey.downloadOptions).flatMap {
                 try? JSONDecoder().decode(DownloadOptions.self, from: $0)
             } ?? DownloadOptions()
         // Enabled SponsorBlock preferences now always remove segments.
@@ -126,7 +131,7 @@ import WrathCore
             if clearingCache {
                 message = "Wrath is clearing its cache. Try adding the link again shortly."
             } else {
-                message = "A download is already in progress. Wait for it to finish before adding another link."
+                message = Self.busyMessage
             }
             return false
         }
@@ -190,7 +195,7 @@ import WrathCore
         let report = await files.delete(
             candidates.compactMap(\.job.filename),
             galleries: Set(candidates.filter { $0.job.kind == .images }.compactMap(\.job.filename)))
-        let removed = Set(candidates.filter { report.deleted.contains($0.job.filename!) }.map(\.id))
+        let removed = Set(candidates.filter { $0.job.filename.map(report.deleted.contains) == true }.map(\.id))
         items.removeAll { removed.contains($0.id) }
         save()
         if !report.failures.isEmpty {
@@ -258,20 +263,16 @@ import WrathCore
         runner = Task { await run(item, token: token) }
     }
     func redactSystemProgress() { backgroundSession?.redactMediaDetails() }
+    // MARK: - Running a download
+
     private func run(_ item: JobItem, token: OperationToken) async {
         let background = DownloadBackgroundSession()
         backgroundSession = background
         let directory = temporary.appendingPathComponent(item.id.uuidString, isDirectory: true)
         do {
             let notice = try await background.begin(id: item.id, title: item.job.title) { [weak self, weak item] in
-                guard let self, let item, item.job.state.isActive else { return }
-                token.cancel()
-                self.runner?.cancel()
-                item.job.state = .failed
-                item.job.error =
-                    "Background download stopped by iOS or cancelled from system progress. Add the link again to retry."
-                self.message = item.job.error
-                self.save()
+                guard let self, let item else { return }
+                self.stopForSystem(item, token: token)
             }
             try Task.checkCancellation()
             item.backgroundNotice = notice
@@ -279,157 +280,207 @@ import WrathCore
             item.job.state = .resolving
             item.preparationLabel = "Finding media"
             save()
-            var progress: JobTransferProgress?
-            let ticker = Task {
-                while !Task.isCancelled {
-                    do { try await Task.sleep(for: .milliseconds(250)) } catch { break }
-                    progress?.refresh()
-                    background.update(
-                        BackgroundDownloadProgress(
-                            title: item.job.title, state: item.job.state, fraction: item.progress,
-                            known: item.progressKnown, phase: item.phase, paused: item.isPaused,
-                            receivedBytes: item.receivedBytes, speed: item.speed, eta: item.eta,
-                            hideDetails: AppLockServices.controller.isEnabled))
-                }
-            }
+            let ticker = startProgressTicker(for: item, background: background)
             defer { ticker.cancel() }
             let plan = try await MediaEngine.shared.download(
                 job: item.job, cache: support.appendingPathComponent("ExtractorCache"), directory: directory,
                 token: token
-            ) { [weak item] event in
-                guard let item, item.job.state.isActive, !token.isCancelled else { return }
-                if let plan = event.plan, event.type == "resolved" {
-                    item.job.title = plan.title
-                    item.job.author = plan.author
-                    item.job.thumbnail = plan.thumbnail
-                    item.job.state = .downloading
-                    item.isStreaming = false
-                    if item.job.kind != .images { progress = JobTransferProgress(item: item, tracks: plan.tracks) }
-                } else if event.type == "galleryProgress" {
-                    item.receivedBytes = event.bytes ?? item.receivedBytes
-                    item.progress = min(1, max(0, event.fraction ?? 0))
-                    item.progressKnown = true
-                    item.speed = event.speed ?? 0
-                    item.preparationLabel = "Image \(event.imageIndex ?? 1) of \(event.imageCount ?? 1)"
-                } else if event.type == "progress", let index = event.index {
-                    progress?.update(
-                        index: index, bytes: event.bytes ?? 0, total: event.total ?? 0,
-                        speed: event.speed, eta: event.eta)
-                }
+            ) { [weak self, weak item] event in
+                guard let self, let item, item.job.state.isActive, !token.isCancelled else { return }
+                self.apply(event, to: item)
             }
             try Task.checkCancellation()
             if item.job.kind == .images {
-                guard let galleryFiles = plan.galleryFiles else {
-                    throw EngineFailure(message: "The gallery returned no files.")
-                }
-                try await pauseControl.wait()
-                item.job.state = .processing
-                item.phase = .saving
-                item.progressKnown = false
-                item.job.warning = plan.warnings?.joined(separator: " · ")
-                let name = try LibraryFiles.publishGallery(
-                    directory.appendingPathComponent("gallery"), files: galleryFiles, to: documents,
-                    title: plan.title, reservedNames: Set(items.compactMap(\.job.filename)))
-                item.job.filename = name
-                item.job.galleryFiles = galleryFiles
-                item.job.bytes = galleryFiles.reduce(0) { $0 + $1.bytes }
+                try await saveGallery(plan, for: item, from: directory)
             } else {
-                item.job.sponsorSegmentsFound = plan.sponsorSegments?.count ?? 0
-                item.job.warning = plan.subtitleWarning
-                for warning in plan.warnings ?? [] {
-                    item.job.warning = DownloadWarnings.appending(warning, to: item.job.warning)
-                }
-                try await pauseControl.wait()
-                item.job.state = .processing
-                item.progress = 0
-                item.progressKnown = false
-                item.phase = .preparing
-                item.speed = 0
-                item.eta = nil
-                save()
-                let options = item.job.effectiveOptions
-                var cover: URL?
-                if options.embedThumbnail {
-                    item.preparationLabel = "Preparing thumbnail"
-                    do {
-                        cover = try await EmbeddedArtwork.shared.prepare(
-                            url: plan.thumbnail, destination: directory.appendingPathComponent("cover.jpg"))
-                    } catch {
-                        try Task.checkCancellation()
-                        if error is CancellationError { throw error }
-                        item.job.warning = DownloadWarnings.appending(ArtworkRecovery.warning, to: item.job.warning)
-                    }
-                }
-                // Media bytes are already local; FFmpeg only processes local inputs.
-                let inputs = plan.tracks.map(\.url)
-                let headers = Array(repeating: "", count: inputs.count)
-                let processed = try await ArtworkRecovery.finish(cover: cover) { artwork in
-                    let captions = try await SubtitleRecovery.finish(subtitle: plan.subtitle) { subtitle in
-                        let attempt = UUID()
-                        item.processingAttempt = attempt
-                        defer { if item.processingAttempt == attempt { item.processingAttempt = nil } }
-                        return try await MediaEngine.shared.remux(
-                            inputs: inputs, headers: headers, output: directory.appendingPathComponent("finished"),
-                            audioOnly: item.job.kind == .audio, token: token,
-                            cover: artwork, segments: plan.sponsorSegments ?? [], sponsorMode: options.sponsorMode,
-                            subtitle: subtitle
-                        ) { [weak item] phase, progress in
-                            Task { @MainActor in
-                                if let item, item.job.state == .processing, !item.isPaused,
-                                    item.processingAttempt == attempt
-                                {
-                                    let samePhase = item.phase == phase
-                                    item.phase = phase
-                                    item.progressKnown = progress != nil
-                                    item.progress = progress.map { samePhase ? max(item.progress, $0) : $0 } ?? 0
-                                }
-                            }
-                        }
-                    }
-                    if let warning = captions.warning {
-                        item.job.warning = DownloadWarnings.appending(warning, to: item.job.warning)
-                    }
-                    return captions.url
-                }
-                if let warning = processed.warning {
-                    item.job.warning = DownloadWarnings.appending(warning, to: item.job.warning)
-                }
-                let staged = processed.url
-                try await pauseControl.wait()
-                item.phase = .saving
-                item.progressKnown = false
-                item.job.savedMediaInfo = await MediaEngine.shared.probe(staged, token: token)
-                try Task.checkCancellation()
-                let size = try staged.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-                guard size > 0 else { throw EngineFailure(message: "The processed file is empty.") }
-                let filename = try LibraryFiles.publish(
-                    staged, to: documents, title: plan.title, reservedNames: Set(items.compactMap(\.job.filename)))
-                item.job.filename = filename
-                item.job.bytes = Int64(size)
+                try await saveMedia(plan, for: item, in: directory, token: token)
             }
             item.job.progress = 1
             item.job.completed = Date()
             item.job.state = .completed
             UINotificationFeedbackGenerator().notificationOccurred(.success)
         } catch {
-            if item.job.state.isActive {
-                item.job.state = Task.isCancelled ? .cancelled : .failed
-                item.job.error = Task.isCancelled ? nil : error.localizedDescription
-                item.speed = 0
-                if !Task.isCancelled {
-                    failedSocialLink = nil
-                    let reason = error.localizedDescription
-                    message = reason
-                    if SocialPlatform.forURL(item.job.sourceURL)?.supportsCookies == true
-                        && (reason.localizedCaseInsensitiveContains("may require an authenticated session")
-                            || reason.localizedCaseInsensitiveContains("denied access"))
-                    {
-                        failedSocialLink = item.job.sourceURL
+            recordFailure(error, for: item)
+        }
+        await finishRun(item, directory: directory, background: background)
+    }
+
+    /// iOS expired the background task, or the user stopped it from the system progress UI.
+    private func stopForSystem(_ item: JobItem, token: OperationToken) {
+        guard item.job.state.isActive else { return }
+        token.cancel()
+        runner?.cancel()
+        item.job.state = .failed
+        item.job.error =
+            "Background download stopped by iOS or cancelled from system progress. Add the link again to retry."
+        message = item.job.error
+        save()
+    }
+
+    private func startProgressTicker(for item: JobItem, background: DownloadBackgroundSession) -> Task<Void, Never> {
+        Task { [weak self] in
+            while !Task.isCancelled {
+                do { try await Task.sleep(for: .milliseconds(250)) } catch { break }
+                self?.activeTransfer?.refresh()
+                background.update(
+                    BackgroundDownloadProgress(
+                        title: item.job.title, state: item.job.state, fraction: item.progress,
+                        known: item.progressKnown, phase: item.phase, paused: item.isPaused,
+                        receivedBytes: item.receivedBytes, speed: item.speed, eta: item.eta,
+                        hideDetails: AppLockServices.controller.isEnabled))
+            }
+        }
+    }
+
+    private func apply(_ event: DownloadEvent, to item: JobItem) {
+        switch event.type {
+        case "resolved":
+            guard let plan = event.plan else { return }
+            item.job.title = plan.title
+            item.job.author = plan.author
+            item.job.thumbnail = plan.thumbnail
+            item.job.state = .downloading
+            item.isStreaming = false
+            if item.job.kind != .images { activeTransfer = JobTransferProgress(item: item, tracks: plan.tracks) }
+        case "galleryProgress":
+            item.receivedBytes = event.bytes ?? item.receivedBytes
+            item.progress = min(1, max(0, event.fraction ?? 0))
+            item.progressKnown = true
+            item.speed = event.speed ?? 0
+            item.preparationLabel = "Image \(event.imageIndex ?? 1) of \(event.imageCount ?? 1)"
+        case "progress":
+            guard let index = event.index else { return }
+            activeTransfer?.update(
+                index: index, bytes: event.bytes ?? 0, total: event.total ?? 0, speed: event.speed, eta: event.eta)
+        default:
+            break
+        }
+    }
+
+    /// Names that completed records still own, even if the file was moved in Files.
+    private var reservedNames: Set<String> { Set(items.compactMap(\.job.filename)) }
+
+    private func saveGallery(_ plan: MediaPlan, for item: JobItem, from directory: URL) async throws {
+        guard let galleryFiles = plan.galleryFiles else {
+            throw EngineFailure(message: "The gallery returned no files.")
+        }
+        try await pauseControl.wait()
+        item.job.state = .processing
+        item.phase = .saving
+        item.progressKnown = false
+        item.job.warning = plan.warnings?.joined(separator: " · ")
+        let name = try LibraryFiles.publishGallery(
+            directory.appendingPathComponent("gallery"), files: galleryFiles, to: documents,
+            title: plan.title, reservedNames: reservedNames)
+        item.job.filename = name
+        item.job.galleryFiles = galleryFiles
+        item.job.bytes = galleryFiles.reduce(0) { $0 + $1.bytes }
+    }
+
+    private func saveMedia(_ plan: MediaPlan, for item: JobItem, in directory: URL, token: OperationToken)
+        async throws
+    {
+        item.job.sponsorSegmentsFound = plan.sponsorSegments?.count ?? 0
+        item.job.warning = plan.subtitleWarning
+        for warning in plan.warnings ?? [] { addWarning(warning, to: item) }
+        try await pauseControl.wait()
+        item.job.state = .processing
+        item.progress = 0
+        item.progressKnown = false
+        item.phase = .preparing
+        item.speed = 0
+        item.eta = nil
+        save()
+        let cover = try await prepareCover(for: plan, item: item, in: directory)
+        let staged = try await process(plan, for: item, cover: cover, in: directory, token: token)
+        try await pauseControl.wait()
+        item.phase = .saving
+        item.progressKnown = false
+        item.job.savedMediaInfo = await MediaEngine.shared.probe(staged, token: token)
+        try Task.checkCancellation()
+        let size = try staged.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+        guard size > 0 else { throw EngineFailure(message: "The processed file is empty.") }
+        item.job.filename = try LibraryFiles.publish(
+            staged, to: documents, title: plan.title, reservedNames: reservedNames)
+        item.job.bytes = Int64(size)
+    }
+
+    /// Downloads the thumbnail to embed. A failed download only adds a warning; cancellation propagates.
+    private func prepareCover(for plan: MediaPlan, item: JobItem, in directory: URL) async throws -> URL? {
+        guard item.job.effectiveOptions.embedThumbnail else { return nil }
+        item.preparationLabel = "Preparing thumbnail"
+        do {
+            return try await EmbeddedArtwork.prepare(
+                url: plan.thumbnail, destination: directory.appendingPathComponent("cover.jpg"))
+        } catch {
+            try Task.checkCancellation()
+            if error is CancellationError { throw error }
+            addWarning(ArtworkRecovery.warning, to: item)
+            return nil
+        }
+    }
+
+    /// Remuxes the downloaded tracks, retrying without artwork or subtitles if either one fails.
+    private func process(
+        _ plan: MediaPlan, for item: JobItem, cover: URL?, in directory: URL, token: OperationToken
+    ) async throws -> URL {
+        let options = item.job.effectiveOptions
+        // Media bytes are already local; FFmpeg only processes local inputs.
+        let inputs = plan.tracks.map(\.url)
+        let processed = try await ArtworkRecovery.finish(cover: cover) { artwork in
+            let captions = try await SubtitleRecovery.finish(subtitle: plan.subtitle) { subtitle in
+                let attempt = UUID()
+                item.processingAttempt = attempt
+                defer { if item.processingAttempt == attempt { item.processingAttempt = nil } }
+                return try await MediaEngine.shared.remux(
+                    inputs: inputs, output: directory.appendingPathComponent("finished"),
+                    audioOnly: item.job.kind == .audio, token: token,
+                    cover: artwork, segments: plan.sponsorSegments ?? [], sponsorMode: options.sponsorMode,
+                    subtitle: subtitle
+                ) { [weak item] phase, progress in
+                    Task { @MainActor in
+                        guard let item, item.job.state == .processing, !item.isPaused,
+                            item.processingAttempt == attempt
+                        else { return }
+                        let samePhase = item.phase == phase
+                        item.phase = phase
+                        item.progressKnown = progress != nil
+                        item.progress = progress.map { samePhase ? max(item.progress, $0) : $0 } ?? 0
                     }
                 }
             }
+            if let warning = captions.warning { addWarning(warning, to: item) }
+            return captions.url
         }
+        if let warning = processed.warning { addWarning(warning, to: item) }
+        return processed.url
+    }
+
+    private func addWarning(_ warning: String, to item: JobItem) {
+        item.job.warning = DownloadWarnings.appending(warning, to: item.job.warning)
+    }
+
+    private func recordFailure(_ error: Error, for item: JobItem) {
+        guard item.job.state.isActive else { return }
+        let cancelled = Task.isCancelled
+        item.job.state = cancelled ? .cancelled : .failed
+        item.job.error = cancelled ? nil : error.localizedDescription
+        item.speed = 0
+        guard !cancelled else { return }
+        failedSocialLink = nil
+        let reason = error.localizedDescription
+        message = reason
+        if SocialPlatform.forURL(item.job.sourceURL)?.supportsCookies == true
+            && (reason.localizedCaseInsensitiveContains("may require an authenticated session")
+                || reason.localizedCaseInsensitiveContains("denied access"))
+        {
+            failedSocialLink = item.job.sourceURL
+        }
+    }
+
+    private func finishRun(_ item: JobItem, directory: URL, background: DownloadBackgroundSession) async {
         item.isPaused = false
+        activeTransfer = nil
         try? FileManager.default.removeItem(at: directory)
         if item.job.state != .completed { items.removeAll { $0.id == item.id } }
         save()

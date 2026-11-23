@@ -40,7 +40,7 @@ import WrathCore
     private func submit(id: UUID, title: String) {
         // Never expose a media title while permission and privacy changes race.
         // The first progress update supplies a title only if app lock is off.
-        let title = "Wrath download"
+        let title = BackgroundDownloadProgress.privateTitle
         // Exact, unique registrations avoid duplicate-handler crashes and stale
         // callbacks being attached to a later download. Continued tasks may be
         // registered after app launch; Info.plist must permit this identifier family.
@@ -174,7 +174,7 @@ import WrathCore
 
     func redactMediaDetails() {
         guard #available(iOS 26, *), let task = continuedTask as? BGContinuedProcessingTask else { return }
-        task.updateTitle("Wrath download", subtitle: latest?.subtitle ?? "Finding media")
+        task.updateTitle(BackgroundDownloadProgress.privateTitle, subtitle: latest?.subtitle ?? "Finding media")
         lastUpdate = 0
     }
 
@@ -192,7 +192,8 @@ import WrathCore
                 task.progress.totalUnitCount = 1_000
                 task.progress.completedUnitCount = 1_000
                 task.updateTitle(
-                    AppLockServices.controller.isEnabled ? "Wrath download" : task.title, subtitle: "Saved to Library")
+                    AppLockServices.controller.isEnabled ? BackgroundDownloadProgress.privateTitle : task.title,
+                    subtitle: "Saved to Library")
             }
             task.setTaskCompleted(success: success)
             continuedTask = nil

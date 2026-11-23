@@ -14,7 +14,7 @@ private enum LibrarySheet: Identifiable {
 
 struct LibraryView: View {
     @Bindable var store: DownloadStore
-    @AppStorage("librarySort") private var sort: LibrarySort = .newest
+    @AppStorage(PreferenceKey.librarySort) private var sort: LibrarySort = .newest
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var sheet: LibrarySheet?
     @State private var detail: JobItem?

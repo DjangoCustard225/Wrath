@@ -1,7 +1,6 @@
 """Upstream yt-dlp and gallery-dl extraction; native FFmpeg handles media processing."""
 import json
 import os
-import sys
 import urllib.parse
 import urllib.request
 import urllib.error
@@ -376,7 +375,8 @@ def parse_sponsor_segments(records, video_id, categories, duration):
                 end = min(end, duration)
             key = (start, end, category)
             if start < end and key not in seen:
-                result.append(dict(start=start, end=end, category=category)); seen.add(key)
+                result.append(dict(start=start, end=end, category=category))
+                seen.add(key)
     return sorted(result, key=lambda x: (x['start'], x['end']))[:500]
 
 
@@ -460,7 +460,7 @@ def parse_subtitle_cues(content, extension):
 
     def seconds(value):
         parts = value.replace(',', '.').split(':')
-        return sum(float(p) * factor for p, factor in zip(reversed(parts), (1, 60, 3600)))
+        return sum(float(p) * factor for p, factor in zip(reversed(parts), (1, 60, 3600), strict=False))
 
     cues = []
     for block in re.split(r'\n[ \t]*\n', content.replace('\r\n', '\n').replace('\r', '\n')):

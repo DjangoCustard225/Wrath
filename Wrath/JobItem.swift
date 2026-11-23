@@ -17,6 +17,8 @@ import WrathCore
     var backgroundNotice: String?
     @ObservationIgnored var processingAttempt: UUID?
     nonisolated let id: UUID
+    /// `progress` limited to 0...1 for progress bars and percentages.
+    var clampedProgress: Double { min(1, max(0, progress)) }
     init(_ job: DownloadJob) {
         self.job = job
         id = job.id

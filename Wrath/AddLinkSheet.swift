@@ -206,12 +206,10 @@ struct AddLinkSheet: View {
             link = ""
             focused = true
         } label: {
-            Text("CLEAR LINK")
-                .font(.system(.subheadline, design: .rounded).weight(.semibold))
-                .tracking(1.8).frame(maxWidth: .infinity, minHeight: 28)
+            CapsuleButtonTitle(title: "Clear link")
         }
         .wrathGlassButton(clear: true).buttonBorderShape(.capsule).controlSize(.large)
-        .foregroundStyle(.primary).accessibilityLabel("Clear link")
+        .foregroundStyle(.primary)
     }
     @ViewBuilder private var inputStatus: some View {
         if sourceReady {

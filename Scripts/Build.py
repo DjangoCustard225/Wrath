@@ -35,11 +35,12 @@ def main():
     native = platform.system() == 'Darwin' and not args.package_only
     require_icon = args.require_adaptive_icon or native
     icon_assets = args.icon_assets
-    if not icon_assets and shutil.which('xcrun'):
-        if subprocess.run(['xcrun', '--find', 'actool'], capture_output=True).returncode == 0:
-            icon_assets = ROOT / 'xtool/native-icon'
-            shutil.rmtree(icon_assets, ignore_errors=True)
-            compile_icon(icon_assets)
+    has_actool = shutil.which('xcrun') and subprocess.run(
+        ['xcrun', '--find', 'actool'], capture_output=True, check=False).returncode == 0
+    if not icon_assets and has_actool:
+        icon_assets = ROOT / 'xtool/native-icon'
+        shutil.rmtree(icon_assets, ignore_errors=True)
+        compile_icon(icon_assets)
     if require_icon and not icon_assets:
         parser.error('Native icons require Xcode actool or --icon-assets from a Mac build.')
     output = ROOT / 'Wrath.ipa'

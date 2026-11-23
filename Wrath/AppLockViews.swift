@@ -61,6 +61,14 @@ private enum AppLockAction: Identifiable {
         case .biometrics(let enabled): "biometrics-\(enabled)"
         }
     }
+    var setsNewPIN: Bool {
+        if case .enable = self { return true }
+        return false
+    }
+    var isDisable: Bool {
+        if case .disable = self { return true }
+        return false
+    }
     var title: String {
         switch self {
         case .enable: "Set Up App Lock"
@@ -82,7 +90,7 @@ private struct AppLockManagementSheet: View {
     init(action: AppLockAction, lock: AppLockController) {
         self.action = action
         self.lock = lock
-        _enteringNewPIN = State(initialValue: action.id == "enable")
+        _enteringNewPIN = State(initialValue: action.setsNewPIN)
     }
 
     var body: some View {
@@ -97,7 +105,7 @@ private struct AppLockManagementSheet: View {
                         }
                         AppLockFeedback(lock: lock)
                         Section {
-                            Button(action.id == "disable" ? "Turn off app lock" : "Continue") {
+                            Button(action.isDisable ? "Turn off app lock" : "Continue") {
                                 let pin = currentPIN
                                 currentPIN = ""
                                 Task {

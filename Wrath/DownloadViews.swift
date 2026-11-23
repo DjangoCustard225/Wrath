@@ -8,7 +8,7 @@ struct DownloadsView: View {
     var body: some View {
         NavigationStack {
             Group {
-                if let item = store.items.first(where: { $0.job.state.isActive }) {
+                if let item = store.activeItem {
                     ScrollView {
                         Button {
                             showProgress(item.id)
@@ -66,7 +66,7 @@ private struct ActiveDownloadRow: View {
                 Text(item.downloadTitle).font(.headline).lineLimit(2)
                 Text(status).font(.caption).foregroundStyle(.secondary)
                 if item.progressKnown {
-                    ProgressView(value: min(1, max(0, item.progress))).tint(.orange)
+                    ProgressView(value: item.clampedProgress).tint(.orange)
                 } else if !item.isPaused {
                     ProgressView().controlSize(.mini)
                 }
@@ -81,7 +81,7 @@ private struct ActiveDownloadRow: View {
         switch item.job.state {
         case .resolving: return item.preparationLabel
         case .downloading:
-            return item.progressKnown ? "Downloading · \(Int(min(1, max(0, item.progress)) * 100))%" : "Downloading"
+            return item.progressKnown ? "Downloading · \(Int(item.clampedProgress * 100))%" : "Downloading"
         default: return item.phase.label
         }
     }

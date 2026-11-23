@@ -18,3 +18,23 @@ struct MediaCardStyle: ViewModifier {
             .contentShape(shape)
     }
 }
+
+/// The uppercase, tracked title used by Wrath's large capsule buttons.
+struct CapsuleButtonTitle: View {
+    let title: String
+    var systemImage: String?
+
+    var body: some View {
+        Group {
+            if let systemImage {
+                Label(title.uppercased(), systemImage: systemImage)
+            } else {
+                Text(title.uppercased())
+            }
+        }
+        .font(.system(.subheadline, design: .rounded).weight(.semibold))
+        .tracking(1.8).frame(maxWidth: .infinity, minHeight: 28)
+        // VoiceOver reads uppercase text letter by letter in some languages.
+        .accessibilityLabel(title)
+    }
+}

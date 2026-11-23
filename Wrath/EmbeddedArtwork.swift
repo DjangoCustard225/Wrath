@@ -2,9 +2,9 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-actor EmbeddedArtwork {
-    static let shared = EmbeddedArtwork()
-    func prepare(url: URL?, destination: URL) async throws -> URL {
+/// Downloads a source thumbnail and writes it as a JPEG for FFmpeg to embed.
+enum EmbeddedArtwork {
+    static func prepare(url: URL?, destination: URL) async throws -> URL {
         guard let url, ["https", "http"].contains(url.scheme?.lowercased() ?? "") else {
             throw EngineFailure(
                 message: "This source did not provide a thumbnail. Turn off Embed thumbnail to continue.")

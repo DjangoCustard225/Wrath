@@ -1,14 +1,20 @@
 import Foundation
 import Security
 
-struct KeychainCookieStore {
-    var service = "app.wrath.downloader.youtube"
+/// One generic-password Keychain item that stays on this device and never syncs.
+struct KeychainItem {
+    let service: String
+    let account: String
+    /// A `kSecAttrAccessible…` value; the default allows background downloads to read it.
+    var accessibility = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+
     private var query: [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword, kSecAttrService as String: service,
-            kSecAttrAccount as String: "cookies", kSecAttrSynchronizable as String: false,
+            kSecAttrAccount as String: account, kSecAttrSynchronizable as String: false,
         ]
     }
+
     func read() throws -> Data? {
         var request = query
         request[kSecReturnData as String] = true
@@ -19,10 +25,10 @@ struct KeychainCookieStore {
         guard status == errSecSuccess, let data = result as? Data else { throw Failure(status: status) }
         return data
     }
+
     func write(_ data: Data) throws {
         let attributes: [String: Any] = [
-            kSecValueData as String: data,
-            kSecAttrAccessible as String: kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly,
+            kSecValueData as String: data, kSecAttrAccessible as String: accessibility,
         ]
         var status = SecItemUpdate(query as CFDictionary, attributes as CFDictionary)
         if status == errSecItemNotFound {
@@ -30,17 +36,17 @@ struct KeychainCookieStore {
         }
         guard status == errSecSuccess else { throw Failure(status: status) }
     }
+
     func remove() throws {
         let status = SecItemDelete(query as CFDictionary)
         guard status == errSecSuccess || status == errSecItemNotFound else { throw Failure(status: status) }
     }
-    private struct Failure: LocalizedError {
+
+    struct Failure: LocalizedError {
         let status: OSStatus
         var errorDescription: String? {
-            if status == errSecInteractionNotAllowed {
-                return "Unlock your device to access saved cookies, then try again."
-            }
-            return "Secure cookie storage is unavailable (error \(status))."
+            if status == errSecInteractionNotAllowed { return "Unlock your device, then try again." }
+            return "Secure storage is unavailable (error \(status))."
         }
     }
 }

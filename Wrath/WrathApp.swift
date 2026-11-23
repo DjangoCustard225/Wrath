@@ -103,7 +103,7 @@ struct WrathRoot: View {
         }
     }
 
-    private var activeDownloadID: UUID? { store.items.first(where: { $0.job.state.isActive })?.id }
+    private var activeDownloadID: UUID? { store.activeItem?.id }
 
     private func showProgress(_ id: UUID) {
         guard lock.isUnlocked else { return }
@@ -136,7 +136,7 @@ struct WrathRoot: View {
     private func retryLink(_ url: URL) {
         guard !store.isDownloadOccupied else {
             tab = .downloads
-            store.message = "A download is already in progress. Wait for it to finish before adding another link."
+            store.message = DownloadStore.busyMessage
             return
         }
         tab = .downloads
