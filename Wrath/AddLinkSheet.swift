@@ -3,6 +3,7 @@ import WrathCore
 
 // Layout adapted from Quby’s AddTorrentView.
 // Copyright (c) 2026 Ammar Haseeb. MIT license: Resources/Licenses/Quby.txt.
+/// Takes a link, checks what it offers, then collects download options on a second page.
 struct AddLinkSheet: View {
     @Bindable var store: DownloadStore
     private let initialLink: String
@@ -41,10 +42,17 @@ struct AddLinkSheet: View {
     }
     private var sourceReady: Bool { validURL != nil && availability?.mediaKinds.isEmpty == false }
     private var canDownload: Bool { sourceReady && !invalidOptions && store.canAddDownload }
+
     var body: some View {
         NavigationStack {
-            page {
-                sourceCard
+            AddLinkPage {
+                LinkSourceCard(
+                    link: Binding(get: { link }, set: { link = $0 }), url: validURL, checked: sourceReady,
+                    socialSite: socialSite, focus: $focused, submit: continueToOptions
+                ) { site in
+                    focused = false
+                    loginSite = site
+                }
                 VStack(spacing: 12) {
                     CohesivePasteButton { value in
                         link = value.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -59,7 +67,9 @@ struct AddLinkSheet: View {
                 }
             }
             .wrathBottomBar {
-                if sourceReady { nextButton }
+                if sourceReady {
+                    BottomBarActionButton(title: "Next", systemImage: "arrow.right", action: continueToOptions)
+                }
             }
             .wrathHideBottomEdge(focused || keyboardVisible)
             .navigationTitle("Add a link").navigationBarTitleDisplayMode(.inline)
@@ -67,14 +77,8 @@ struct AddLinkSheet: View {
             .navigationDestination(isPresented: $showingOptions) { downloadPage }
         }
         // The sheet owns inspection so navigation never cancels or restarts it.
-        .task(
-            id: LinkInspectionRequest(
-                url: validURL, revision: inspector.revision,
-                accessRevision: socialSite != nil ? socialAccess.revision : nil)
-        ) {
-            await inspector.inspect(
-                validURL,
-                context: socialSite != nil ? socialAccess.revision : nil)
+        .task(id: LinkInspectionRequest(url: validURL, revision: inspector.revision, accessRevision: accessRevision)) {
+            await inspector.inspect(validURL, context: accessRevision)
             guard !Task.isCancelled else { return }
             resolveOptions()
             continueToOptions()
@@ -95,112 +99,45 @@ struct AddLinkSheet: View {
         .onChange(of: store.quality) { _, _ in resolveOptions() }
         .onChange(of: store.options.videoCodec) { _, _ in resolveOptions() }
     }
-    private func page<Content: View>(@ViewBuilder content: () -> Content) -> some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 24, content: content)
-                .frame(maxWidth: 600).frame(maxWidth: .infinity)
-                .padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 24)
-        }
-        .background(Color(uiColor: .systemGroupedBackground).ignoresSafeArea())
-        .wrathSoftScrollEdges()
-        .scrollDismissesKeyboard(.interactively)
-    }
+
+    /// Saved sign-ins change what a social link can return, so they are part of the inspection key.
+    private var accessRevision: UUID? { socialSite != nil ? socialAccess.revision : nil }
+
     private var downloadPage: some View {
-        page {
+        AddLinkPage {
             if let availability, !availability.mediaKinds.isEmpty {
                 SourcePreview(availability: availability, kind: availability.gallery == nil ? store.kind : .images)
                     .modifier(MediaCardStyle(padding: 12))
                 if let gallery = availability.gallery {
-                    DetailCardSection(title: "Photos") {
-                        VStack(alignment: .leading, spacing: 14) {
-                            LabeledContent("Images", value: String(gallery.count))
-                            Divider()
-                            LabeledContent("Quality", value: "Original")
-                            Divider()
-                            Text("Saved together as one gallery in Library. Size is available after downloading.")
-                                .font(.footnote).foregroundStyle(.secondary)
-                            if gallery.skippedVideos > 0 {
-                                Divider()
-                                Text(
-                                    "This downloads images only. Video or unsupported linked attachments are not included."
-                                )
-                                .font(.footnote).foregroundStyle(.secondary)
-                            }
-                        }.modifier(MediaCardStyle(padding: 16))
-                    }
+                    GalleryCard(gallery: gallery)
                 } else {
-                    formatCard(availability)
-                    optionsCard(availability)
+                    FormatCard(
+                        availability: availability, kind: $store.kind, quality: $store.quality, options: store.options)
+                    DetailCardSection(title: "Options") {
+                        SourceOptions(
+                            availability: availability, kind: store.kind, quality: store.quality,
+                            isYouTube: isYouTube, options: $store.options, cardLayout: true
+                        )
+                        .font(.subheadline).modifier(MediaCardStyle(padding: 16))
+                    }
                 }
             }
         }
-        .wrathBottomBar { downloadButton }
+        .wrathBottomBar {
+            BottomBarActionButton(
+                title: "Download", systemImage: "arrow.down.circle", enabled: canDownload, action: add)
+        }
         .wrathHideBottomEdge(focused || keyboardVisible)
         .navigationTitle("Download options").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() } } }
     }
-    private var nextButton: some View {
-        Button(action: continueToOptions) {
-            Label("Next", systemImage: "arrow.right")
-                .font(.headline).frame(maxWidth: .infinity, minHeight: 28)
-        }.buttonStyle(.borderedProminent).buttonBorderShape(.capsule).controlSize(.large)
-            .frame(maxWidth: 600).frame(maxWidth: .infinity)
-            .padding(.horizontal, 18).padding(.vertical, 12)
-    }
+
     private func continueToOptions() {
         guard sourceReady else { return }
         focused = false
         showingOptions = true
     }
-    private var sourceCard: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack(alignment: .top, spacing: 12) {
-                Image(systemName: "link").font(.title2).foregroundStyle(.orange)
-                    .frame(width: 50, height: 50)
-                    .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("Media link").font(.headline)
-                    Text(validURL?.host() ?? "Video, audio, or photos from a link")
-                        .font(.subheadline).foregroundStyle(.secondary)
-                        .lineLimit(2).fixedSize(horizontal: false, vertical: true)
-                }
-                Spacer(minLength: 0)
-            }
-            Divider()
-            TextField("Paste a media link", text: Binding(get: { link }, set: { link = $0 }), axis: .vertical)
-                .font(.subheadline).lineLimit(1...5)
-                .keyboardType(.URL).textContentType(.URL).textInputAutocapitalization(.never)
-                .autocorrectionDisabled().focused($focused).submitLabel(.next).onSubmit(continueToOptions)
-                .accessibilityLabel("Media link")
-            inputStatus.font(.caption)
-            if let site = socialSite {
-                Divider()
-                if site == .reddit {
-                    Text(
-                        "Copy the full Reddit post URL from your browser’s address bar, not the Reddit app. Use a link containing /comments/."
-                    )
-                    .font(.caption).foregroundStyle(.secondary)
-                    .accessibilityIdentifier("reddit-browser-link-note")
-                }
-                HStack {
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(site.name + " access").font(.subheadline.weight(.medium))
-                        Text(
-                            socialAccess.cookieCounts[site, default: 0] > 0
-                                ? "Cookies saved" : "Sign in if this link requires an account"
-                        )
-                        .font(.caption).foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button(socialAccess.cookieCounts[site, default: 0] > 0 ? "Reconnect" : "Connect") {
-                        focused = false
-                        loginSite = site
-                    }.buttonStyle(.bordered)
-                }
-            }
-        }.modifier(MediaCardStyle(padding: 20))
-    }
+
     private var clearLinkButton: some View {
         Button {
             link = ""
@@ -211,51 +148,7 @@ struct AddLinkSheet: View {
         .wrathGlassButton(clear: true).buttonBorderShape(.capsule).controlSize(.large)
         .foregroundStyle(.primary)
     }
-    @ViewBuilder private var inputStatus: some View {
-        if sourceReady {
-            Label("Link checked", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
-        } else if !link.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && validURL == nil {
-            Label("Enter a valid link", systemImage: "exclamationmark.circle").foregroundStyle(.orange)
-        }
-    }
-    private func formatCard(_ availability: CodecAvailability) -> some View {
-        DetailCardSection(title: "Save as") {
-            VStack(spacing: 16) {
-                Picker("Save as", selection: $store.kind) {
-                    ForEach(availability.mediaKinds, id: \.self) { Text($0.rawValue.capitalized).tag($0) }
-                }.pickerStyle(.segmented)
-                if store.kind == .video {
-                    Divider()
-                    LabeledContent("Quality") {
-                        Picker("Quality", selection: $store.quality) {
-                            ForEach(availability.qualities, id: \.self) { Text($0.label).tag($0) }
-                        }.labelsHidden().pickerStyle(.menu)
-                    }
-                }
-                Divider()
-                SizeEstimateRow(
-                    availability: availability, kind: store.kind, quality: store.quality, options: store.options)
-            }.font(.subheadline).modifier(MediaCardStyle(padding: 16))
-        }
-    }
-    private func optionsCard(_ availability: CodecAvailability) -> some View {
-        DetailCardSection(title: "Options") {
-            SourceOptions(
-                availability: availability, kind: store.kind, quality: store.quality,
-                isYouTube: isYouTube, options: $store.options, cardLayout: true
-            )
-            .font(.subheadline).modifier(MediaCardStyle(padding: 16))
-        }
-    }
-    private var downloadButton: some View {
-        Button(action: add) {
-            Label("Download", systemImage: "arrow.down.circle")
-                .font(.headline).frame(maxWidth: .infinity, minHeight: 28)
-        }.buttonStyle(.borderedProminent).buttonBorderShape(.capsule).controlSize(.large)
-            .disabled(!canDownload)
-            .frame(maxWidth: 600).frame(maxWidth: .infinity)
-            .padding(.horizontal, 18).padding(.vertical, 12)
-    }
+
     private func resolveOptions() {
         guard let availability, let firstKind = availability.mediaKinds.first else { return }
         guard availability.gallery == nil else { return }
@@ -266,6 +159,7 @@ struct AddLinkSheet: View {
         let resolved = availability.resolving(store.options, kind: kind, quality: quality)
         if resolved != store.options { store.options = resolved }
     }
+
     private func add() {
         guard canDownload, let url = validURL else { return }
         guard store.add(url, availability: availability) else { return }

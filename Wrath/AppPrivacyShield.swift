@@ -104,10 +104,7 @@ struct AppPrivacyShield: UIViewControllerRepresentable {
 
     @objc private func sceneBackground(_ note: Notification) {
         guard let changed = note.object as? UIWindowScene, changed === scene else { return }
-        active = false
-        deactivatedBySystem = true
-        lockIfAllScenesBackgrounded()
-        refresh()
+        background()
     }
 
     private func lockIfAllScenesBackgrounded() {
@@ -130,18 +127,7 @@ struct AppPrivacyShield: UIViewControllerRepresentable {
         }
         // Re-cover synchronously if the app leaves the foreground mid-unlock.
         cancelUnlockTransition()
-        if privacyWindow == nil {
-            originalWindow = attachedScene.windows.first(where: \.isKeyWindow)
-            let window = UIWindow(windowScene: attachedScene)
-            window.windowLevel = .alert + 1
-            window.backgroundColor = .systemBackground
-            let host = UIHostingController(rootView: PrivacyShieldContent(lock: lock, active: active))
-            host.view.backgroundColor = .systemBackground
-            host.view.accessibilityViewIsModal = true
-            window.rootViewController = host
-            hosting = host
-            privacyWindow = window
-        }
+        if privacyWindow == nil { makePrivacyWindow(in: attachedScene) }
         originalWindow?.accessibilityElementsHidden = true
         if !active {
             originalWindow?.endEditing(true)
@@ -158,6 +144,19 @@ struct AppPrivacyShield: UIViewControllerRepresentable {
         } else {
             privacyWindow?.isHidden = false
         }
+    }
+
+    private func makePrivacyWindow(in scene: UIWindowScene) {
+        originalWindow = scene.windows.first(where: \.isKeyWindow)
+        let window = UIWindow(windowScene: scene)
+        window.windowLevel = .alert + 1
+        window.backgroundColor = .systemBackground
+        let host = UIHostingController(rootView: PrivacyShieldContent(lock: lock, active: active))
+        host.view.backgroundColor = .systemBackground
+        host.view.accessibilityViewIsModal = true
+        window.rootViewController = host
+        hosting = host
+        privacyWindow = window
     }
 
     private func cancelUnlockTransition() {

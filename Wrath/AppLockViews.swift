@@ -105,23 +105,8 @@ private struct AppLockManagementSheet: View {
                         }
                         AppLockFeedback(lock: lock)
                         Section {
-                            Button(action.isDisable ? "Turn off app lock" : "Continue") {
-                                let pin = currentPIN
-                                currentPIN = ""
-                                Task {
-                                    guard let grant = await lock.authorizeChange(pin: pin) else { return }
-                                    switch action {
-                                    case .disable:
-                                        if lock.disable(authorization: grant) { dismiss() }
-                                    case .biometrics(let enabled):
-                                        if lock.setBiometrics(enabled, authorization: grant) { dismiss() }
-                                    case .change:
-                                        authorization = grant
-                                        enteringNewPIN = true
-                                    case .enable: break
-                                    }
-                                }
-                            }.disabled(!AppLockController.validPIN(currentPIN) || lock.isBusy)
+                            Button(action.isDisable ? "Turn off app lock" : "Continue", action: confirmCurrentPIN)
+                                .disabled(!AppLockController.validPIN(currentPIN) || lock.isBusy)
                         }
                     }
                 }
@@ -137,8 +122,28 @@ private struct AppLockManagementSheet: View {
         .onAppear { lock.clearMessage() }
         .onChange(of: lock.revision) { _, _ in dismiss() }
     }
+
+    /// Checks the current PIN, then applies the action or moves on to choosing a new PIN.
+    private func confirmCurrentPIN() {
+        let pin = currentPIN
+        currentPIN = ""
+        Task {
+            guard let grant = await lock.authorizeChange(pin: pin) else { return }
+            switch action {
+            case .disable:
+                if lock.disable(authorization: grant) { dismiss() }
+            case .biometrics(let enabled):
+                if lock.setBiometrics(enabled, authorization: grant) { dismiss() }
+            case .change:
+                authorization = grant
+                enteringNewPIN = true
+            case .enable: break
+            }
+        }
+    }
 }
 
+/// A six-digit numeric secure field that drops any other characters as they are typed.
 struct AppPINField: View {
     let title: String
     @Binding var text: String
@@ -153,7 +158,8 @@ struct AppPINField: View {
     }
 }
 
-private struct AppPINSetupForm: View {
+/// Chooses a new PIN, for first setup, a change, or recovery after device authentication.
+struct AppPINSetupForm: View {
     @Bindable var lock: AppLockController
     let authorization: UUID?
     let completed: () -> Void
@@ -202,75 +208,6 @@ private struct AppPINSetupForm: View {
     }
 }
 
-struct AppLockScreen: View {
-    @Bindable var lock: AppLockController
-    @State private var pin = ""
-
-    var body: some View {
-        NavigationStack {
-            Group {
-                if let authorization = lock.recoveryAuthorization {
-                    AppPINSetupForm(lock: lock, authorization: authorization, completed: {})
-                        .navigationTitle("Reset Wrath PIN").navigationBarTitleDisplayMode(.inline)
-                        .toolbar {
-                            ToolbarItem(placement: .cancellationAction) {
-                                Button("Cancel") { lock.cancelRecovery() }.disabled(lock.isBusy)
-                            }
-                        }
-                } else {
-                    ScrollView {
-                        VStack(spacing: 24) {
-                            Image(systemName: "lock.fill").font(.system(size: 40)).foregroundStyle(.orange)
-                                .accessibilityHidden(true)
-                            Text("Wrath is locked").font(.title2.weight(.semibold))
-                            Text("Enter your six-digit PIN to continue.").font(.subheadline).foregroundStyle(.secondary)
-                            if !lock.storageUnavailable {
-                                AppPINField(title: "Wrath PIN", text: $pin)
-                                    .textFieldStyle(.roundedBorder).accessibilityIdentifier("app-lock-pin")
-                                Button {
-                                    let value = pin
-                                    pin = ""
-                                    Task { await lock.unlock(pin: value) }
-                                } label: {
-                                    Text("Unlock").opacity(lock.isBusy ? 0 : 1)
-                                        .frame(maxWidth: .infinity)
-                                        .overlay {
-                                            if lock.isBusy { ProgressView().tint(.white) }
-                                        }
-                                }
-                                .buttonStyle(.borderedProminent).controlSize(.large)
-                                .disabled(!AppLockController.validPIN(pin) || lock.isBusy)
-                                .accessibilityLabel(lock.isBusy ? "Authenticating" : "Unlock")
-                                .accessibilityIdentifier("app-lock-unlock")
-                                if lock.biometricsEnabled, let name = lock.biometricName {
-                                    Button("Unlock with \(name)") {
-                                        Task { await lock.unlockWithBiometrics() }
-                                    }.disabled(lock.isBusy)
-                                }
-                            } else {
-                                Button("Retry secure storage") { lock.reload() }.disabled(lock.isBusy)
-                            }
-                            if let message = lock.message {
-                                Text(message).font(.footnote).foregroundStyle(.secondary)
-                            }
-                            AppLockRetryLabel(deadline: lock.retryAfter)
-                            Button("Forgot PIN?") { Task { await lock.authorizeRecovery() } }
-                                .disabled(lock.isBusy || !lock.canRecover)
-                        }
-                        .padding(28).frame(maxWidth: 380).frame(maxWidth: .infinity)
-                    }
-                    .scrollDismissesKeyboard(.interactively)
-                    .navigationTitle("Wrath").navigationBarTitleDisplayMode(.inline)
-                }
-            }
-            .background(Color(uiColor: .systemBackground))
-        }
-        .tint(.orange)
-        .task { await lock.unlockWithBiometrics(automatically: true) }
-        .onChange(of: lock.revision) { _, _ in pin = "" }
-    }
-}
-
 private struct AppLockFeedback: View {
     let lock: AppLockController
     var body: some View {
@@ -279,20 +216,6 @@ private struct AppLockFeedback: View {
                 if lock.isBusy { ProgressView("Authenticating…") }
                 if let message = lock.message { Text(message).font(.footnote).foregroundStyle(.secondary) }
                 AppLockRetryLabel(deadline: lock.retryAfter)
-            }
-        }
-    }
-}
-
-private struct AppLockRetryLabel: View {
-    let deadline: Date?
-    var body: some View {
-        if let deadline {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                if deadline > context.date {
-                    Text("Try your PIN again in \(Int(ceil(deadline.timeIntervalSince(context.date)))) seconds")
-                        .font(.footnote).foregroundStyle(.secondary).monospacedDigit()
-                }
             }
         }
     }
