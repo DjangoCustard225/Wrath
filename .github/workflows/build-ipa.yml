@@ -1,0 +1,85 @@
+name: Build IPA
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths-ignore:
+      - '**.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: wrath-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [modern, compatibility]
+    runs-on: xcode-27
+    timeout-minutes: 60
+    env:
+      WRATH_VARIANT: ${{ matrix.variant }}
+      DEVELOPER_DIR: /Applications/Xcode.app/Contents/Developer
+      WRATH_DEPENDENCY_CACHE: ${{ github.workspace }}/.cache/dependencies
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - name: Check toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          xcrun --sdk iphoneos --show-sdk-version
+          python3 --version
+      - name: Cache pinned dependency archives
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.WRATH_DEPENDENCY_CACHE }}
+          key: wrath-runtime-v1-${{ hashFiles('Scripts/Prepare.py', 'Dependencies/python-packages.json') }}
+      - name: Restore pinned runtimes
+        run: python3 Scripts/Prepare.py
+      - name: Verify bundled yt-dlp
+        run: python3 Scripts/VerifyYtDlp.py
+      - name: Run unit tests
+        run: |
+          swift test --package-path Core
+          python3 -m unittest discover -s Tests
+      - name: Render native icon
+        run: python3 Scripts/AppIcon.py --compile --output xtool/native-icon
+      - name: Build and audit unsigned IPA
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p xtool
+          python3 Scripts/Build.py --icon-assets xtool/native-icon --require-adaptive-icon 2>&1 | tee xtool/build.log
+          python3 Scripts/VerifyIPA.py Wrath.ipa --require-adaptive-icon
+      - name: Name IPA
+        shell: bash
+        run: |
+          VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Wrath/Info.plist)
+          BUILD=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' Wrath/Info.plist)
+          MIN=$([ "$WRATH_VARIANT" = compatibility ] && echo 17 || echo 26)
+          NAME="Wrath-$VERSION-build$BUILD-ios$MIN+.ipa"
+          mkdir -p dist && cp Wrath.ipa "dist/$NAME"
+          echo "IPA_NAME=$NAME" >> "$GITHUB_ENV"
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ env.IPA_NAME }}
+          path: dist/${{ env.IPA_NAME }}
+          if-no-files-found: error
+          retention-days: 30
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log-${{ matrix.variant }}
+          path: xtool/build.log
+          if-no-files-found: ignore
+          retention-days: 14
