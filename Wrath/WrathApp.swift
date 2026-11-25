@@ -24,6 +24,7 @@ struct WrathRoot: View {
     @Environment(AppLockController.self) private var lock
     @State private var tab = AppTab.downloads
     @State private var presentation = AppSheetPresentation()
+    @State private var handoff = LinkHandoff.shared
     @State private var progressItem: JobItem?
     @State private var reconnectURL: URL?
     @State private var reconnectRevision: UUID?
@@ -51,7 +52,7 @@ struct WrathRoot: View {
                     tab = .downloads
                     activeDownloadChanged(activeDownloadID)
                 }
-            case .retryLink(let url):
+            case .prefilledLink(let url):
                 AddLinkSheet(store: store, link: url.absoluteString) {
                     tab = .downloads
                     activeDownloadChanged(activeDownloadID)
@@ -66,12 +67,14 @@ struct WrathRoot: View {
             }
         }
         .onChange(of: activeDownloadID, initial: true) { _, id in activeDownloadChanged(id) }
+        .onChange(of: handoff.pending, initial: true) { openHandedOffLink() }
         .onChange(of: lock.isEnabled) { _, enabled in
             if enabled { store.redactSystemProgress() }
         }
         .onChange(of: lock.isUnlocked) { _, unlocked in
             guard unlocked else { return }
             activeDownloadChanged(activeDownloadID)
+            openHandedOffLink()
         }
         .alert(
             "Wrath",
@@ -129,17 +132,23 @@ struct WrathRoot: View {
         }
         if changed, let link, presentation.sheet == nil {
             store.failedSocialLink = nil
-            retryLink(link)
+            presentLink(link)
         }
     }
 
-    private func retryLink(_ url: URL) {
+    /// Opens a link sent from Shortcuts once Wrath is unlocked.
+    private func openHandedOffLink() {
+        guard lock.isUnlocked, let url = handoff.take() else { return }
+        presentLink(url)
+    }
+
+    private func presentLink(_ url: URL) {
         guard !store.isDownloadOccupied else {
             tab = .downloads
             store.message = DownloadStore.busyMessage
             return
         }
         tab = .downloads
-        presentation.present(.retryLink(url))
+        presentation.present(.prefilledLink(url))
     }
 }
