@@ -13,6 +13,7 @@ let package = Package(
     products: [
         .library(name: "Wrath", targets: ["Wrath"]),
         .library(name: "WrathBridge", targets: ["WrathBridge"]),
+        .library(name: "WrathShare", targets: ["WrathShare"]),
     ],
     dependencies: [.package(path: "Core"), .package(path: "Dependencies/FFmpegBuild")],
     targets: [
@@ -25,5 +26,8 @@ let package = Package(
             path: "Wrath", exclude: ["Info.plist", "Resources", "PrivacyInfo.xcprivacy"],
             swiftSettings: variantSettings
         ),
+        .target(
+            name: "WrathShare", dependencies: [.product(name: "WrathCore", package: "Core")],
+            path: "WrathShare", exclude: ["Info.plist"]),
     ], swiftLanguageModes: [.v6]
 )

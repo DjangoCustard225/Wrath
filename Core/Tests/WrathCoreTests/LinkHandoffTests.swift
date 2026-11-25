@@ -24,4 +24,28 @@ import Testing
         handoff.send("https://example.com/two")
         #expect(handoff.take() == URL(string: "https://example.com/two"))
     }
+
+    @Test func roundTripsSharedTextThroughTheAppLink() throws {
+        let shared = "Look at this https://www.reddit.com/r/a/comments/b/c/?x=1&y=a+b#top"
+        let url = try #require(LinkHandoff.appURL(for: shared))
+        #expect(url.scheme == "wrath")
+        let handoff = LinkHandoff()
+        #expect(handoff.receive(url))
+        #expect(handoff.take() == URL(string: "https://www.reddit.com/r/a/comments/b/c/?x=1&y=a+b#top"))
+    }
+
+    @Test func ignoresOtherAppLinks() throws {
+        let handoff = LinkHandoff()
+        let encoded = "https%3A%2F%2Fyoutu.be%2Fabc"
+        #expect(!handoff.receive(try #require(URL(string: "wrath://settings?link=\(encoded)"))))
+        #expect(!handoff.receive(try #require(URL(string: "other://add?link=\(encoded)"))))
+        #expect(!handoff.receive(try #require(URL(string: "wrath://add"))))
+        #expect(handoff.receive(try #require(URL(string: "wrath://add?link=\(encoded)"))))
+    }
+
+    @Test func refusesEmptyOrOversizedText() {
+        #expect(LinkHandoff.appURL(for: "  \n") == nil)
+        let long = "https://example.com/" + String(repeating: "a", count: 5000)
+        #expect(LinkHandoff.appURL(for: long)?.absoluteString.count ?? .max < 4096 * 3 + 30)
+    }
 }

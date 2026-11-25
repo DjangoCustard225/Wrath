@@ -9,6 +9,7 @@ import zipfile
 from BuildVariant import MINIMUM_IOS, VARIANT
 
 ROOT = Path(__file__).resolve().parent.parent
+SHARE_EXTENSION = 'WrathShare.appex'
 
 
 def macho(data):
@@ -41,6 +42,20 @@ def macho(data):
     return dependencies, rpaths, minimum
 
 
+def verify_share_extension(archive, names, base):
+    """Only the share extension may be embedded; returns its executable for the Mach-O checks."""
+    plugins = {n.removeprefix(base + 'PlugIns/').split('/')[0] for n in names if n.startswith(base + 'PlugIns/')}
+    assert plugins == {SHARE_EXTENSION}, f'Unexpected app extensions: {sorted(plugins)}'
+    root = f'{base}PlugIns/{SHARE_EXTENSION}/'
+    info = plistlib.loads(archive.read(root + 'Info.plist'))
+    assert info['CFBundleIdentifier'] == 'app.wrath.downloader.share', info['CFBundleIdentifier']
+    extension = info['NSExtension']
+    assert extension['NSExtensionPointIdentifier'] == 'com.apple.share-services'
+    assert extension['NSExtensionPrincipalClass'] == 'WrathShareViewController'
+    assert root + info['CFBundleExecutable'] in names, 'Missing share extension executable'
+    return root + info['CFBundleExecutable']
+
+
 def verify(path, require_adaptive_icon=False):
     from VerifyYtDlp import verify_ipa
     verify_ipa(path)
@@ -52,11 +67,12 @@ def verify(path, require_adaptive_icon=False):
         assert info['CFBundleIdentifier'] == 'app.wrath.downloader'
         assert info['MinimumOSVersion'] == MINIMUM_IOS
         assert info['WrathBuildVariant'] == VARIANT
-        assert not info.get('CFBundleURLTypes'), 'Unexpected incoming URL automation'
-        # The Download with Wrath intent only prefills the add-link screen after App Lock; nothing else may automate.
+        # The shortcut and share extension only prefill the add-link screen after App Lock; nothing else automates.
+        url_schemes = [scheme for kind in info.get('CFBundleURLTypes', []) for scheme in kind['CFBundleURLSchemes']]
+        assert url_schemes == ['wrath'], f'Unexpected incoming URL schemes: {url_schemes}'
         assert any(n.startswith(base + 'Metadata.appintents/') for n in names), 'Missing App Intents metadata'
-        assert not any(n.startswith(base + folder) for n in names
-                       for folder in ['PlugIns/', 'Shortcuts/']), 'Unexpected automation assets'
+        assert not any(n.startswith(base + 'Shortcuts/') for n in names), 'Unexpected automation assets'
+        share = verify_share_extension(archive, names, base)
         assert not any(n.endswith('.shortcut') for n in names), 'Unexpected workflow installer'
         supported = tuple(map(int, MINIMUM_IOS.split('.'))) + (0,)
         assert info['CADisableMinimumFrameDurationOnPhone']
@@ -90,7 +106,7 @@ def verify(path, require_adaptive_icon=False):
                          'Frameworks/Python.framework/Python', 'Frameworks/_ssl.framework/_ssl',
                          'Frameworks/AetherLibavformat.framework/AetherLibavformat', 'Licenses/SponsorBlock.txt', 'AppIcon.png']:
             assert base + required in names, required
-        binaries = [base + info['CFBundleExecutable']]
+        binaries = [base + info['CFBundleExecutable'], share]
         frameworks = []
         for name in names:
             if name.endswith('.framework/Info.plist'):

@@ -67,6 +67,7 @@ struct WrathRoot: View {
             }
         }
         .onChange(of: activeDownloadID, initial: true) { _, id in activeDownloadChanged(id) }
+        .onOpenURL { _ = handoff.receive($0) }
         .onChange(of: handoff.pending, initial: true) { openHandedOffLink() }
         .onChange(of: lock.isEnabled) { _, enabled in
             if enabled { store.redactSystemProgress() }

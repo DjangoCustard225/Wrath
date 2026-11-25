@@ -3,7 +3,7 @@
 <plist version="1.0"><dict>
 <key>CFBundleDisplayName</key><string>Wrath</string>
 <key>CFBundleShortVersionString</key><string>0.1.4</string>
-    <key>CFBundleVersion</key><string>78</string>
+    <key>CFBundleVersion</key><string>79</string>
 <key>NSPhotoLibraryAddUsageDescription</key><string>Save photos or videos to your photo library when you choose Save from the share sheet.</string>
 <key>NSFaceIDUsageDescription</key><string>Use Face ID to unlock Wrath and verify your identity when resetting your app PIN.</string>
 <key>UIBackgroundModes</key><array><string>processing</string></array>
@@ -14,5 +14,6 @@
 <key>NSAppTransportSecurity</key><dict><key>NSAllowsArbitraryLoads</key><true/></dict>
 <key>NSLocalNetworkUsageDescription</key><string>Download media from links on your local network.</string>
 <key>UILaunchScreen</key><dict/>
+<key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>app.wrath.downloader.share</string><key>CFBundleURLSchemes</key><array><string>wrath</string></array></dict></array>
 <key>UISupportedInterfaceOrientations</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>
 </dict></plist>

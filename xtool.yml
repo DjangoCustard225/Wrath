@@ -8,3 +8,6 @@ resources:
   - Wrath/Resources/wrath_worker
   - Wrath/Resources/packages
   - Wrath/Resources/Licenses
+extensions:
+  - product: WrathShare
+    infoPath: WrathShare/Info.plist
