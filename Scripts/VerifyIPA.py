@@ -53,8 +53,10 @@ def verify(path, require_adaptive_icon=False):
         assert info['MinimumOSVersion'] == MINIMUM_IOS
         assert info['WrathBuildVariant'] == VARIANT
         assert not info.get('CFBundleURLTypes'), 'Unexpected incoming URL automation'
+        # The Download with Wrath intent only prefills the add-link screen after App Lock; nothing else may automate.
+        assert any(n.startswith(base + 'Metadata.appintents/') for n in names), 'Missing App Intents metadata'
         assert not any(n.startswith(base + folder) for n in names
-                       for folder in ['PlugIns/', 'Metadata.appintents/', 'Shortcuts/']), 'Unexpected automation assets'
+                       for folder in ['PlugIns/', 'Shortcuts/']), 'Unexpected automation assets'
         assert not any(n.endswith('.shortcut') for n in names), 'Unexpected workflow installer'
         supported = tuple(map(int, MINIMUM_IOS.split('.'))) + (0,)
         assert info['CADisableMinimumFrameDurationOnPhone']
