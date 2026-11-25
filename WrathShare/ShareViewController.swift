@@ -38,13 +38,16 @@ final class ShareViewController: UIViewController {
         }
     }
 
-    /// Extensions have no supported API for opening their app, so this reaches the application through the
-    /// responder chain, as share extensions commonly do.
+    /// Extensions have no supported API for opening their app. Like other share extensions, this finds the
+    /// application in the responder chain and calls `open(_:options:completionHandler:)` through the runtime,
+    /// since the method is unavailable to extension code at compile time.
     private func open(_ url: URL) {
+        typealias OpenURL = @convention(c) (AnyObject, Selector, NSURL, NSDictionary, AnyObject?) -> Void
+        let selector = NSSelectorFromString("openURL:options:completionHandler:")
         var responder: UIResponder? = self
         while let current = responder {
-            if let application = current as? UIApplication {
-                application.open(url)
+            if current is UIApplication, current.responds(to: selector), let method = current.method(for: selector) {
+                unsafeBitCast(method, to: OpenURL.self)(current, selector, url as NSURL, NSDictionary(), nil)
                 return
             }
             responder = current.next

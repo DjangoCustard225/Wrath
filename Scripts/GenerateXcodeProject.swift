@@ -96,9 +96,8 @@ for (index, name) in ["Debug", "Release"].enumerated() {
         "\(id(12 + index)) = {isa = XCBuildConfiguration; buildSettings = {\(projectSettings)}; name = \(name); };")
     objects.append(
         "\(id(14 + index)) = {isa = XCBuildConfiguration; buildSettings = {\(appSettings)}; name = \(name); };")
-    // Extension-only API checks stay off: opening Wrath from the share sheet needs UIApplication.open.
     let shareSettings =
-        "CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = \(buildNumber); GENERATE_INFOPLIST_FILE = YES; INFOPLIST_FILE = WrathShare/Info.plist; MARKETING_VERSION = \(appVersion); PRODUCT_BUNDLE_IDENTIFIER = app.wrath.downloader.share; PRODUCT_NAME = \"$(TARGET_NAME)\"; TARGETED_DEVICE_FAMILY = \"1,2\"; SKIP_INSTALL = YES; APPLICATION_EXTENSION_API_ONLY = NO; LD_RUNPATH_SEARCH_PATHS = \"$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks\";"
+        "CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = \(buildNumber); GENERATE_INFOPLIST_FILE = YES; INFOPLIST_FILE = WrathShare/Info.plist; MARKETING_VERSION = \(appVersion); PRODUCT_BUNDLE_IDENTIFIER = app.wrath.downloader.share; PRODUCT_NAME = \"$(TARGET_NAME)\"; TARGETED_DEVICE_FAMILY = \"1,2\"; SKIP_INSTALL = YES; APPLICATION_EXTENSION_API_ONLY = YES; LD_RUNPATH_SEARCH_PATHS = \"$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks\";"
     objects.append(
         "\(id(24 + index)) = {isa = XCBuildConfiguration; buildSettings = {\(shareSettings)}; name = \(name); };")
 
