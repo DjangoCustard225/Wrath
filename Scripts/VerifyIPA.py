@@ -9,7 +9,10 @@ import zipfile
 from BuildVariant import MINIMUM_IOS, VARIANT
 
 ROOT = Path(__file__).resolve().parent.parent
-SHARE_EXTENSION = 'WrathShare.appex'
+EXTENSIONS = {
+    'WrathShare.appex': ('app.wrath.downloader.share', 'com.apple.share-services'),
+    'WrathLiveActivity.appex': ('app.wrath.downloader.liveactivity', 'com.apple.widgetkit-extension'),
+}
 
 
 def macho(data):
@@ -42,18 +45,19 @@ def macho(data):
     return dependencies, rpaths, minimum
 
 
-def verify_share_extension(archive, names, base):
-    """Only the share extension may be embedded; returns its executable for the Mach-O checks."""
+def verify_extensions(archive, names, base):
+    """Only the share extension and the Live Activity widget may be embedded; returns their executables."""
     plugins = {n.removeprefix(base + 'PlugIns/').split('/')[0] for n in names if n.startswith(base + 'PlugIns/')}
-    assert plugins == {SHARE_EXTENSION}, f'Unexpected app extensions: {sorted(plugins)}'
-    root = f'{base}PlugIns/{SHARE_EXTENSION}/'
-    info = plistlib.loads(archive.read(root + 'Info.plist'))
-    assert info['CFBundleIdentifier'] == 'app.wrath.downloader.share', info['CFBundleIdentifier']
-    extension = info['NSExtension']
-    assert extension['NSExtensionPointIdentifier'] == 'com.apple.share-services'
-    assert extension['NSExtensionPrincipalClass'] == 'WrathShareViewController'
-    assert root + info['CFBundleExecutable'] in names, 'Missing share extension executable'
-    return root + info['CFBundleExecutable']
+    assert plugins == set(EXTENSIONS), f'Unexpected app extensions: {sorted(plugins)}'
+    executables = []
+    for bundle, (identifier, point) in EXTENSIONS.items():
+        root = f'{base}PlugIns/{bundle}/'
+        info = plistlib.loads(archive.read(root + 'Info.plist'))
+        assert info['CFBundleIdentifier'] == identifier, info['CFBundleIdentifier']
+        assert info['NSExtension']['NSExtensionPointIdentifier'] == point, bundle
+        assert root + info['CFBundleExecutable'] in names, f'Missing {bundle} executable'
+        executables.append(root + info['CFBundleExecutable'])
+    return executables
 
 
 def verify(path, require_adaptive_icon=False):
@@ -72,7 +76,8 @@ def verify(path, require_adaptive_icon=False):
         assert url_schemes == ['wrath'], f'Unexpected incoming URL schemes: {url_schemes}'
         assert any(n.startswith(base + 'Metadata.appintents/') for n in names), 'Missing App Intents metadata'
         assert not any(n.startswith(base + 'Shortcuts/') for n in names), 'Unexpected automation assets'
-        share = verify_share_extension(archive, names, base)
+        extensions = verify_extensions(archive, names, base)
+        assert info.get('NSSupportsLiveActivities'), 'Missing Live Activity support'
         assert not any(n.endswith('.shortcut') for n in names), 'Unexpected workflow installer'
         supported = tuple(map(int, MINIMUM_IOS.split('.'))) + (0,)
         assert info['CADisableMinimumFrameDurationOnPhone']
@@ -106,7 +111,7 @@ def verify(path, require_adaptive_icon=False):
                          'Frameworks/Python.framework/Python', 'Frameworks/_ssl.framework/_ssl',
                          'Frameworks/AetherLibavformat.framework/AetherLibavformat', 'Licenses/SponsorBlock.txt', 'AppIcon.png']:
             assert base + required in names, required
-        binaries = [base + info['CFBundleExecutable'], share]
+        binaries = [base + info['CFBundleExecutable'], *extensions]
         frameworks = []
         for name in names:
             if name.endswith('.framework/Info.plist'):

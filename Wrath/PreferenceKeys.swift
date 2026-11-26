@@ -4,6 +4,8 @@ enum PreferenceKey {
     static let quality = "quality"
     static let downloadOptions = "downloadOptions"
     static let librarySort = "librarySort"
+    static let notifyWhenFinished = "notifyWhenFinished"
+    static let suggestCopiedLinks = "suggestCopiedLinks"
 
     static func socialBrowserUserAgent(_ site: String) -> String { "socialBrowserUserAgent.\(site)" }
     /// Removed manual User-Agent override, deleted on launch.

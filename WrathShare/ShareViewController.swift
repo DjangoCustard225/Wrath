@@ -1,27 +1,37 @@
 import CoreTransferable
+import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
 import WrathCore
 
-/// Wrath's share sheet entry: hands the shared link to the app, which opens on its add-link screen.
+/// Wrath's share sheet entry: choose a format, then download now or finish choosing in Wrath.
 @objc(WrathShareViewController)
 final class ShareViewController: UIViewController {
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        Task { await handOff() }
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        let model = ShareModel()
+        let host = UIHostingController(
+            rootView: ShareOptionsView(
+                model: model,
+                open: { [weak self] text, preset in self?.handOff(text, preset: preset) },
+                cancel: { [weak self] in self?.extensionContext?.completeRequest(returningItems: nil) }))
+        addChild(host)
+        host.view.frame = view.bounds
+        host.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        view.addSubview(host.view)
+        host.didMove(toParent: self)
+        Task { model.text = await sharedText() ?? "" }
     }
 
-    private func handOff() async {
-        let providers = (extensionContext?.inputItems ?? []).compactMap { $0 as? NSExtensionItem }
-            .flatMap { $0.attachments ?? [] }
-        if let text = await sharedText(from: providers), let url = LinkHandoff.appURL(for: text) {
-            open(url)
-        }
+    private func handOff(_ text: String, preset: SharePreset) {
+        if let url = LinkHandoff.appURL(for: text, preset: preset) { open(url) }
         extensionContext?.completeRequest(returningItems: nil)
     }
 
     /// Prefers a shared web link, then shared text such as a caption that contains one.
-    private func sharedText(from providers: [NSItemProvider]) async -> String? {
+    private func sharedText() async -> String? {
+        let providers = (extensionContext?.inputItems ?? []).compactMap { $0 as? NSExtensionItem }
+            .flatMap { $0.attachments ?? [] }
         for provider in providers where provider.hasItemConformingToTypeIdentifier(UTType.url.identifier) {
             if let url = await load(URL.self, from: provider), !url.isFileURL { return url.absoluteString }
         }
@@ -53,5 +63,73 @@ final class ShareViewController: UIViewController {
             }
             responder = current.next
         }
+    }
+}
+
+@Observable @MainActor private final class ShareModel {
+    /// Nil while the shared item is loading.
+    var text: String?
+    var link: URL? { text.flatMap(LinkInput.parse) }
+}
+
+private struct ShareOptionsView: View {
+    let model: ShareModel
+    let open: (String, SharePreset) -> Void
+    let cancel: () -> Void
+    // The extension keeps its own last choice; Wrath's settings live in the app's container.
+    @AppStorage("shareKind") private var kind = MediaKind.video
+    @AppStorage("shareQuality") private var quality = Quality.fullHD.rawValue
+
+    private static let qualities = [0, 2160, 1440, 1080, 720, 480]
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let text = model.text, let link = model.link {
+                    Section {
+                        LabeledContent("Link", value: link.host() ?? link.absoluteString)
+                    }
+                    Section {
+                        Picker("Save as", selection: $kind) {
+                            Text("Video").tag(MediaKind.video)
+                            Text("Audio").tag(MediaKind.audio)
+                        }.pickerStyle(.segmented)
+                        if kind == .video {
+                            Picker("Quality", selection: $quality) {
+                                ForEach(Self.qualities, id: \.self) { value in
+                                    Text(Quality(rawValue: value)?.label ?? "").tag(value)
+                                }
+                            }
+                        }
+                    } footer: {
+                        Text("Wrath uses the closest available quality. Photo posts download as galleries.")
+                    }
+                    Section {
+                        Button {
+                            open(text, preset(startNow: true))
+                        } label: {
+                            Label("Download Now", systemImage: "arrow.down.circle.fill").frame(maxWidth: .infinity)
+                        }
+                        .buttonStyle(.borderedProminent).controlSize(.large)
+                        .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+                        Button("More Options in Wrath") { open(text, preset(startNow: false)) }
+                            .frame(maxWidth: .infinity)
+                    }
+                } else if model.text == nil {
+                    ProgressView().frame(maxWidth: .infinity)
+                } else {
+                    ContentUnavailableView(
+                        "No link found", systemImage: "link.badge.plus",
+                        description: Text("Share a web link, or text that contains one, to download it with Wrath."))
+                }
+            }
+            .navigationTitle("Wrath").navigationBarTitleDisplayMode(.inline)
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Cancel", action: cancel) } }
+        }
+        .tint(.orange)
+    }
+
+    private func preset(startNow: Bool) -> SharePreset {
+        SharePreset(kind: kind, quality: kind == .video ? Quality(rawValue: quality) : nil, startNow: startNow)
     }
 }

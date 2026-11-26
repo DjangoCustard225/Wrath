@@ -5,6 +5,8 @@ struct DownloadsView: View {
     @Bindable var store: DownloadStore
     let add: () -> Void
     let showProgress: (UUID) -> Void
+    let copiedLink: CopiedLinkDetector
+    let pasteLink: @MainActor (String) -> Void
     var body: some View {
         NavigationStack {
             Group {
@@ -27,6 +29,14 @@ struct DownloadsView: View {
                 } else {
                     LiquidPlusButton(diameter: 104, action: add)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .safeAreaInset(edge: .top) {
+                            if copiedLink.hasLink {
+                                CopiedLinkBanner(detector: copiedLink, paste: pasteLink)
+                                    .padding(.horizontal, 18).padding(.top, 8)
+                                    .transition(.move(edge: .top).combined(with: .opacity))
+                            }
+                        }
+                        .animation(.smooth, value: copiedLink.hasLink)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

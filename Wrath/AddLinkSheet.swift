@@ -7,6 +7,8 @@ import WrathCore
 struct AddLinkSheet: View {
     @Bindable var store: DownloadStore
     private let initialLink: String
+    private let preset: SharePreset
+    @State private var presetApplied = false
     @State private var editedLink: String?
     @State private var inspector = LinkInspector()
     @State private var socialAccess = SocialAccessStore.shared
@@ -17,9 +19,10 @@ struct AddLinkSheet: View {
     @Environment(\.dismiss) private var dismiss
     @FocusState private var focused: Bool
 
-    init(store: DownloadStore, link: String, added: @escaping () -> Void) {
+    init(store: DownloadStore, link: String, preset: SharePreset = .none, added: @escaping () -> Void) {
         self.store = store
         initialLink = link
+        self.preset = preset
         self.added = added
     }
 
@@ -78,11 +81,17 @@ struct AddLinkSheet: View {
         }
         // The sheet owns inspection so navigation never cancels or restarts it.
         .task(id: LinkInspectionRequest(url: validURL, revision: inspector.revision, accessRevision: accessRevision)) {
+            applyPreset()
             await inspector.inspect(validURL, context: accessRevision)
             guard !Task.isCancelled else { return }
             resolveOptions()
-            continueToOptions()
+            if startsImmediately {
+                add()
+            } else {
+                continueToOptions()
+            }
         }
+        .sensoryFeedback(.success, trigger: sourceReady) { _, ready in ready }
         .sheet(item: $loginSite) { site in
             SocialLoginView(site: site)
         }
@@ -130,6 +139,19 @@ struct AddLinkSheet: View {
         .wrathHideBottomEdge(focused || keyboardVisible)
         .navigationTitle("Download options").navigationBarTitleDisplayMode(.inline)
         .toolbar { ToolbarItem(placement: .topBarTrailing) { Button("Cancel") { dismiss() } } }
+    }
+
+    /// Applies the share sheet's format and quality once, before the link is checked.
+    private func applyPreset() {
+        guard !presetApplied else { return }
+        presetApplied = true
+        if let kind = preset.kind { store.kind = kind }
+        if let quality = preset.quality { store.quality = quality }
+    }
+
+    /// "Download Now" from the share sheet skips the options page when the link and choices are valid.
+    private var startsImmediately: Bool {
+        preset.startNow && validURL?.absoluteString == initialLink && editedLink == nil && canDownload
     }
 
     private func continueToOptions() {

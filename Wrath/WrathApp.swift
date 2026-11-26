@@ -25,6 +25,8 @@ struct WrathRoot: View {
     @State private var tab = AppTab.downloads
     @State private var presentation = AppSheetPresentation()
     @State private var handoff = LinkHandoff.shared
+    @State private var copiedLink = CopiedLinkDetector.shared
+    @Environment(\.scenePhase) private var phase
     @State private var progressItem: JobItem?
     @State private var reconnectURL: URL?
     @State private var reconnectRevision: UUID?
@@ -32,7 +34,10 @@ struct WrathRoot: View {
         TabView(selection: $tab) {
             DownloadsView(
                 store: store, add: { presentation.present(.addLink) },
-                showProgress: showProgress
+                showProgress: showProgress, copiedLink: copiedLink,
+                pasteLink: { text in
+                    if !handoff.send(text) { store.message = "The clipboard doesn’t contain a supported link." }
+                }
             )
             .tabItem { Label("Downloads", systemImage: "arrow.down.circle") }.tag(AppTab.downloads)
             LibraryView(store: store)
@@ -52,8 +57,8 @@ struct WrathRoot: View {
                     tab = .downloads
                     activeDownloadChanged(activeDownloadID)
                 }
-            case .prefilledLink(let url):
-                AddLinkSheet(store: store, link: url.absoluteString) {
+            case .prefilledLink(let shared):
+                AddLinkSheet(store: store, link: shared.url.absoluteString, preset: shared.preset) {
                     tab = .downloads
                     activeDownloadChanged(activeDownloadID)
                 }
@@ -68,6 +73,10 @@ struct WrathRoot: View {
         }
         .onChange(of: activeDownloadID, initial: true) { _, id in activeDownloadChanged(id) }
         .onOpenURL { _ = handoff.receive($0) }
+        .onChange(of: phase, initial: true) { _, phase in
+            if phase == .active { copiedLink.refresh() }
+        }
+        .overlay(alignment: .top) { ToastOverlay(message: $store.toast) }
         .onChange(of: handoff.pending, initial: true) { openHandedOffLink() }
         .onChange(of: lock.isEnabled) { _, enabled in
             if enabled { store.redactSystemProgress() }
@@ -133,23 +142,44 @@ struct WrathRoot: View {
         }
         if changed, let link, presentation.sheet == nil {
             store.failedSocialLink = nil
-            presentLink(link)
+            presentLink(SharedLink(url: link))
         }
     }
 
-    /// Opens a link sent from Shortcuts once Wrath is unlocked.
+    /// Opens a link from Shortcuts, the share sheet or the clipboard once Wrath is unlocked.
     private func openHandedOffLink() {
-        guard lock.isUnlocked, let url = handoff.take() else { return }
-        presentLink(url)
+        guard lock.isUnlocked, let link = handoff.take() else { return }
+        presentLink(link)
     }
 
-    private func presentLink(_ url: URL) {
+    private func presentLink(_ link: SharedLink) {
         guard !store.isDownloadOccupied else {
             tab = .downloads
             store.message = DownloadStore.busyMessage
             return
         }
         tab = .downloads
-        presentation.present(.prefilledLink(url))
+        presentation.present(.prefilledLink(link))
+    }
+}
+
+/// A brief confirmation at the top of the screen that hides itself.
+private struct ToastOverlay: View {
+    @Binding var message: String?
+
+    var body: some View {
+        if let message {
+            Label(message, systemImage: "checkmark.circle.fill")
+                .font(.subheadline.weight(.semibold))
+                .padding(.horizontal, 18).padding(.vertical, 12)
+                .background(.regularMaterial, in: Capsule())
+                .padding(.top, 8)
+                .transition(.move(edge: .top).combined(with: .opacity))
+                .task(id: message) {
+                    try? await Task.sleep(for: .seconds(2))
+                    withAnimation { self.message = nil }
+                }
+                .accessibilityAddTraits(.isStaticText)
+        }
     }
 }

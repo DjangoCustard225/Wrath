@@ -43,6 +43,36 @@ for (index, path) in shareSources.enumerated() {
     shareRefs.append(ref)
     shareBuilds.append(build)
 }
+let widgetSources = (fm.enumerator(atPath: "WrathLiveActivity/Widget")?.allObjects as? [String] ?? [])
+    .filter { $0.hasSuffix(".swift") }.sorted().map { "WrathLiveActivity/Widget/" + $0 }
+var widgetRefs: [String] = []
+var widgetBuilds: [String] = []
+for (index, path) in widgetSources.enumerated() {
+    let ref = id(700 + index)
+    let build = id(800 + index)
+    objects.append(
+        "\(ref) = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = \"\(path)\"; sourceTree = SOURCE_ROOT; };"
+    )
+    objects.append("\(build) = {isa = PBXBuildFile; fileRef = \(ref); };")
+    widgetRefs.append(ref)
+    widgetBuilds.append(build)
+}
+// The Live Activity widget (target 30) shares its attributes with the app through a package library.
+objects += [
+    "\(id(322)) = {isa = PBXFileReference; explicitFileType = \"wrapper.app-extension\"; path = WrathLiveActivity.appex; sourceTree = BUILT_PRODUCTS_DIR; };",
+    "\(id(323)) = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = WrathLiveActivity/Widget/Info.plist; sourceTree = SOURCE_ROOT; };",
+    "\(id(318)) = {isa = PBXBuildFile; fileRef = \(id(322)); settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };",
+    "\(id(405)) = {isa = XCSwiftPackageProductDependency; package = \(id(400)); productName = WrathActivityShared; };",
+    "\(id(319)) = {isa = PBXBuildFile; productRef = \(id(405)); };",
+    "\(id(406)) = {isa = XCSwiftPackageProductDependency; package = \(id(400)); productName = WrathActivityShared; };",
+    "\(id(324)) = {isa = PBXBuildFile; productRef = \(id(406)); };",
+    "\(id(30)) = {isa = PBXNativeTarget; buildConfigurationList = \(id(33)); buildPhases = (\(id(31)), \(id(32))); buildRules = (); dependencies = (); name = WrathLiveActivity; packageProductDependencies = (\(id(406))); productName = WrathLiveActivity; productReference = \(id(322)); productType = \"com.apple.product-type.app-extension\"; };",
+    "\(id(31)) = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (\(widgetBuilds.joined(separator: ","))); runOnlyForDeploymentPostprocessing = 0; };",
+    "\(id(32)) = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (\(id(324))); runOnlyForDeploymentPostprocessing = 0; };",
+    "\(id(33)) = {isa = XCConfigurationList; buildConfigurations = (\(id(34)), \(id(35))); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };",
+    "\(id(36)) = {isa = PBXTargetDependency; target = \(id(30)); targetProxy = \(id(37)); };",
+    "\(id(37)) = {isa = PBXContainerItemProxy; containerPortal = \(id(1)); proxyType = 1; remoteGlobalIDString = \(id(30)); remoteInfo = WrathLiveActivity; };",
+]
 // The share extension (target 20) is built first and embedded in Wrath.app/PlugIns.
 objects += [
     "\(id(320)) = {isa = PBXFileReference; explicitFileType = \"wrapper.app-extension\"; path = WrathShare.appex; sourceTree = BUILT_PRODUCTS_DIR; };",
@@ -50,7 +80,7 @@ objects += [
     "\(id(317)) = {isa = PBXBuildFile; fileRef = \(id(320)); settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };",
     "\(id(404)) = {isa = XCSwiftPackageProductDependency; package = \(id(402)); productName = WrathCore; };",
     "\(id(316)) = {isa = PBXBuildFile; productRef = \(id(404)); };",
-    "\(id(8)) = {isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = \"\"; dstSubfolderSpec = 13; files = (\(id(317))); name = \"Embed Foundation Extensions\"; runOnlyForDeploymentPostprocessing = 0; };",
+    "\(id(8)) = {isa = PBXCopyFilesBuildPhase; buildActionMask = 2147483647; dstPath = \"\"; dstSubfolderSpec = 13; files = (\(id(317)), \(id(318))); name = \"Embed Foundation Extensions\"; runOnlyForDeploymentPostprocessing = 0; };",
     "\(id(20)) = {isa = PBXNativeTarget; buildConfigurationList = \(id(23)); buildPhases = (\(id(21)), \(id(22))); buildRules = (); dependencies = (); name = WrathShare; packageProductDependencies = (\(id(404))); productName = WrathShare; productReference = \(id(320)); productType = \"com.apple.product-type.app-extension\"; };",
     "\(id(21)) = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (\(shareBuilds.joined(separator: ","))); runOnlyForDeploymentPostprocessing = 0; };",
     "\(id(22)) = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (\(id(316))); runOnlyForDeploymentPostprocessing = 0; };",
@@ -77,12 +107,12 @@ objects += [
     "\(id(312)) = {isa = PBXBuildFile; fileRef = \(id(311)); };",
     "\(id(313)) = {isa = PBXFileReference; lastKnownFileType = folder; path = Wrath/Resources/Licenses; sourceTree = SOURCE_ROOT; };",
     "\(id(314)) = {isa = PBXBuildFile; fileRef = \(id(313)); };",
-    "\(id(1)) = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 2700; }; buildConfigurationList = \(id(10)); compatibilityVersion = \"Xcode 14.0\"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = \(id(2)); productRefGroup = \(id(3)); projectDirPath = \"\"; projectRoot = \"\"; packageReferences = (\(id(400)), \(id(402))); targets = (\(id(4)), \(id(20))); };",
-    "\(id(2)) = {isa = PBXGroup; children = (\((sourceRefs + shareRefs + [id(302), id(304), id(321), id(307), id(309), id(311), id(313), id(3)]).joined(separator: ","))); sourceTree = \"<group>\"; };",
-    "\(id(3)) = {isa = PBXGroup; children = (\(id(305)), \(id(320))); name = Products; sourceTree = \"<group>\"; };",
-    "\(id(4)) = {isa = PBXNativeTarget; buildConfigurationList = \(id(11)); buildPhases = (\(id(5)), \(id(6)), \(id(7)), \(id(8))); buildRules = (); dependencies = (\(id(26))); name = Wrath; packageProductDependencies = (\(id(401)), \(id(403))); productName = Wrath; productReference = \(id(305)); productType = \"com.apple.product-type.application\"; };",
+    "\(id(1)) = {isa = PBXProject; attributes = {BuildIndependentTargetsInParallel = YES; LastUpgradeCheck = 2700; }; buildConfigurationList = \(id(10)); compatibilityVersion = \"Xcode 14.0\"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = \(id(2)); productRefGroup = \(id(3)); projectDirPath = \"\"; projectRoot = \"\"; packageReferences = (\(id(400)), \(id(402))); targets = (\(id(4)), \(id(20)), \(id(30))); };",
+    "\(id(2)) = {isa = PBXGroup; children = (\((sourceRefs + shareRefs + widgetRefs + [id(302), id(304), id(321), id(323), id(307), id(309), id(311), id(313), id(3)]).joined(separator: ","))); sourceTree = \"<group>\"; };",
+    "\(id(3)) = {isa = PBXGroup; children = (\(id(305)), \(id(320)), \(id(322))); name = Products; sourceTree = \"<group>\"; };",
+    "\(id(4)) = {isa = PBXNativeTarget; buildConfigurationList = \(id(11)); buildPhases = (\(id(5)), \(id(6)), \(id(7)), \(id(8))); buildRules = (); dependencies = (\(id(26)), \(id(36))); name = Wrath; packageProductDependencies = (\(id(401)), \(id(403)), \(id(405))); productName = Wrath; productReference = \(id(305)); productType = \"com.apple.product-type.application\"; };",
     "\(id(5)) = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (\(sourceBuilds.joined(separator: ","))); runOnlyForDeploymentPostprocessing = 0; };",
-    "\(id(6)) = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (\(id(306)), \(id(315))); runOnlyForDeploymentPostprocessing = 0; };",
+    "\(id(6)) = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (\(id(306)), \(id(315)), \(id(319))); runOnlyForDeploymentPostprocessing = 0; };",
     "\(id(7)) = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (\(id(303)), \(id(308)), \(id(310)), \(id(312)), \(id(314))); runOnlyForDeploymentPostprocessing = 0; };",
     "\(id(10)) = {isa = XCConfigurationList; buildConfigurations = (\(id(12)), \(id(13))); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };",
     "\(id(11)) = {isa = XCConfigurationList; buildConfigurations = (\(id(14)), \(id(15))); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };",
@@ -100,6 +130,12 @@ for (index, name) in ["Debug", "Release"].enumerated() {
         "CODE_SIGN_STYLE = Automatic; CURRENT_PROJECT_VERSION = \(buildNumber); GENERATE_INFOPLIST_FILE = YES; INFOPLIST_FILE = WrathShare/Info.plist; MARKETING_VERSION = \(appVersion); PRODUCT_BUNDLE_IDENTIFIER = app.wrath.downloader.share; PRODUCT_NAME = \"$(TARGET_NAME)\"; TARGETED_DEVICE_FAMILY = \"1,2\"; SKIP_INSTALL = YES; APPLICATION_EXTENSION_API_ONLY = YES; LD_RUNPATH_SEARCH_PATHS = \"$(inherited) @executable_path/Frameworks @executable_path/../../Frameworks\";"
     objects.append(
         "\(id(24 + index)) = {isa = XCBuildConfiguration; buildSettings = {\(shareSettings)}; name = \(name); };")
+    let widgetSettings =
+        shareSettings
+        .replacingOccurrences(of: "WrathShare/Info.plist", with: "WrathLiveActivity/Widget/Info.plist")
+        .replacingOccurrences(of: "app.wrath.downloader.share", with: "app.wrath.downloader.liveactivity")
+    objects.append(
+        "\(id(34 + index)) = {isa = XCBuildConfiguration; buildSettings = {\(widgetSettings)}; name = \(name); };")
 
 }
 try fm.createDirectory(atPath: "Wrath.xcodeproj", withIntermediateDirectories: true)
@@ -123,4 +159,6 @@ let scheme = """
     </Scheme>
     """
 try scheme.write(toFile: schemeDir + "/Wrath.xcscheme", atomically: true, encoding: .utf8)
-print("Generated Wrath.xcodeproj with \(sources.count) app and \(shareSources.count) share extension Swift files.")
+print(
+    "Generated Wrath.xcodeproj with \(sources.count) app, \(shareSources.count) share and \(widgetSources.count) Live Activity Swift files."
+)

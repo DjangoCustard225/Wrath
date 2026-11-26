@@ -71,11 +71,14 @@ import WrathCore
     var storage: StorageSnapshot?
     var measuringStorage = false
     var clearingCache = false
+    /// A short confirmation, such as after saving to Photos.
+    var toast: String?
     @ObservationIgnored private var runner: Task<Void, Never>?
     @ObservationIgnored private var token: OperationToken?
     @ObservationIgnored private var pauseControl = DownloadPauseControl()
     @ObservationIgnored private var backgroundSession: DownloadBackgroundSession?
     @ObservationIgnored private var activeTransfer: JobTransferProgress?
+    @ObservationIgnored private let liveActivity = DownloadLiveActivityController()
     @ObservationIgnored private let persistence = DispatchQueue(label: "Wrath.Persistence", qos: .utility)
     let documents: URL
     private let support: URL
@@ -146,6 +149,8 @@ import WrathCore
         items.append(item)
         isDownloadOccupied = true
         save()
+        Haptics.started()
+        DownloadNotifier.requestPermissionIfNeeded()
         start(item)
         return true
     }
@@ -242,6 +247,26 @@ import WrathCore
             save()
         }
     }
+    /// The saved files behind a library item: the media file, or every photo in a gallery.
+    func savedURLs(_ item: JobItem) -> [URL] {
+        item.job.kind == .images ? item.galleryURLs : fileURL(item).map { [$0] } ?? []
+    }
+
+    func saveToPhotos(_ items: [JobItem]) async {
+        await saveToPhotos(urls: items.flatMap(savedURLs))
+    }
+
+    func saveToPhotos(urls: [URL]) async {
+        do {
+            let count = try await PhotoLibrarySaver.save(urls)
+            toast = count == 1 ? "Saved to Photos" : "Saved \(count) items to Photos"
+            Haptics.success()
+        } catch {
+            message = error.localizedDescription
+            Haptics.failure()
+        }
+    }
+
     func fileURL(_ item: JobItem) -> URL? {
         guard let name = item.job.filename, name == (name as NSString).lastPathComponent else { return nil }
         return documents.appendingPathComponent(name)
@@ -298,7 +323,7 @@ import WrathCore
             item.job.progress = 1
             item.job.completed = Date()
             item.job.state = .completed
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
+            Haptics.success()
         } catch {
             recordFailure(error, for: item)
         }
@@ -321,15 +346,21 @@ import WrathCore
         Task { [weak self] in
             while !Task.isCancelled {
                 do { try await Task.sleep(for: .milliseconds(250)) } catch { break }
-                self?.activeTransfer?.refresh()
-                background.update(
-                    BackgroundDownloadProgress(
-                        title: item.job.title, state: item.job.state, fraction: item.progress,
-                        known: item.progressKnown, phase: item.phase, paused: item.isPaused,
-                        receivedBytes: item.receivedBytes, speed: item.speed, eta: item.eta,
-                        hideDetails: AppLockServices.controller.isEnabled))
+                guard let self else { break }
+                activeTransfer?.refresh()
+                let snapshot = progressSnapshot(item)
+                background.update(snapshot)
+                if !background.showsSystemProgress { liveActivity.update(snapshot) }
             }
         }
+    }
+
+    private func progressSnapshot(_ item: JobItem) -> BackgroundDownloadProgress {
+        BackgroundDownloadProgress(
+            title: item.job.title, state: item.job.state, fraction: item.progress,
+            known: item.progressKnown, phase: item.phase, paused: item.isPaused,
+            receivedBytes: item.receivedBytes, speed: item.speed, eta: item.eta,
+            hideDetails: AppLockServices.controller.isEnabled)
     }
 
     private func apply(_ event: DownloadEvent, to item: JobItem) {
@@ -467,6 +498,7 @@ import WrathCore
         item.job.error = cancelled ? nil : error.localizedDescription
         item.speed = 0
         guard !cancelled else { return }
+        Haptics.failure()
         failedSocialLink = nil
         let reason = error.localizedDescription
         message = reason
@@ -481,6 +513,10 @@ import WrathCore
     private func finishRun(_ item: JobItem, directory: URL, background: DownloadBackgroundSession) async {
         item.isPaused = false
         activeTransfer = nil
+        liveActivity.end(
+            progressSnapshot(item), cancelled: item.job.state == .cancelled,
+            inForeground: UIApplication.shared.applicationState == .active)
+        DownloadNotifier.post(for: item.job, hideDetails: AppLockServices.controller.isEnabled)
         try? FileManager.default.removeItem(at: directory)
         if item.job.state != .completed { items.removeAll { $0.id == item.id } }
         save()

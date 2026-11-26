@@ -11,3 +11,5 @@ resources:
 extensions:
   - product: WrathShare
     infoPath: WrathShare/Info.plist
+  - product: WrathLiveActivity
+    infoPath: WrathLiveActivity/Widget/Info.plist

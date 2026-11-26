@@ -93,6 +93,11 @@ struct FileDetailsView: View {
                     if let url = store.fileURL(item) {
                         ShareLink(item: url) { Label("Share file", systemImage: "square.and.arrow.up") }
                     }
+                    if PhotoLibraryCompatibility.canSave(item.job) {
+                        Button("Save to Photos", systemImage: "photo.badge.plus") {
+                            Task { await store.saveToPhotos([item]) }
+                        }
+                    }
                     Button("Rename", systemImage: "pencil") { renaming = true }
                 } label: {
                     Image(systemName: "ellipsis")

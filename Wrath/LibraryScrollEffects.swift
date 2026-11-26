@@ -19,24 +19,32 @@ extension EnvironmentValues {
     }
 }
 
+/// The library list: card rows on the grouped background, with native swipe actions and multi-select.
 struct LibraryListScrollView<Content: View>: View {
+    @Binding var selection: Set<UUID>
     private let content: Content
     @State private var hasStartedScrolling = false
     @State private var isAnimatingScroll = false
     @State private var isUserScrolling = false
     @State private var isAtTop = true
 
-    init(@ViewBuilder content: () -> Content) { self.content = content() }
+    init(selection: Binding<Set<UUID>>, @ViewBuilder content: () -> Content) {
+        _selection = selection
+        self.content = content()
+    }
 
     private var scrollContent: some View {
-        ScrollView {
-            LazyVStack(alignment: .leading, spacing: 20) { content }
-                .padding(.horizontal, 20)
-                .padding(.top, 12)
-                .padding(.bottom, 20)
+        List(selection: $selection) {
+            content
+                .listRowSeparator(.hidden)
+                .listRowBackground(Color.clear)
+                .listRowInsets(EdgeInsets(top: 10, leading: 20, bottom: 10, trailing: 20))
                 .environment(\.libraryScrollEffectsEnabled, hasStartedScrolling && !isAnimatingScroll)
                 .environment(\.libraryScrollAtTop, isAtTop)
         }
+        .listStyle(.plain)
+        .scrollContentBackground(.hidden)
+        .contentMargins(.top, 2, for: .scrollContent)
     }
 
     @ViewBuilder private var trackedScroll: some View {

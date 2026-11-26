@@ -7,7 +7,7 @@ import Testing
     @Test func deliversAParsedLinkOnce() {
         let handoff = LinkHandoff()
         #expect(handoff.send("youtu.be/dQw4w9WgXcQ"))
-        #expect(handoff.take() == URL(string: "https://youtu.be/dQw4w9WgXcQ"))
+        #expect(handoff.take()?.url == URL(string: "https://youtu.be/dQw4w9WgXcQ"))
         #expect(handoff.take() == nil)
     }
 
@@ -22,7 +22,7 @@ import Testing
         let handoff = LinkHandoff()
         handoff.send("https://example.com/one")
         handoff.send("https://example.com/two")
-        #expect(handoff.take() == URL(string: "https://example.com/two"))
+        #expect(handoff.take()?.url == URL(string: "https://example.com/two"))
     }
 
     @Test func roundTripsSharedTextThroughTheAppLink() throws {
@@ -31,7 +31,7 @@ import Testing
         #expect(url.scheme == "wrath")
         let handoff = LinkHandoff()
         #expect(handoff.receive(url))
-        #expect(handoff.take() == URL(string: "https://www.reddit.com/r/a/comments/b/c/?x=1&y=a+b#top"))
+        #expect(handoff.take()?.url == URL(string: "https://www.reddit.com/r/a/comments/b/c/?x=1&y=a+b#top"))
     }
 
     @Test func ignoresOtherAppLinks() throws {
@@ -47,5 +47,21 @@ import Testing
         #expect(LinkHandoff.appURL(for: "  \n") == nil)
         let long = "https://example.com/" + String(repeating: "a", count: 5000)
         #expect(LinkHandoff.appURL(for: long)?.absoluteString.count ?? .max < 4096 * 3 + 30)
+    }
+
+    @Test func carriesShareSheetChoices() throws {
+        let preset = SharePreset(kind: .audio, quality: .hd, startNow: true)
+        let url = try #require(LinkHandoff.appURL(for: "https://youtu.be/abc", preset: preset))
+        let handoff = LinkHandoff()
+        #expect(handoff.receive(url))
+        #expect(handoff.take() == SharedLink(url: try #require(URL(string: "https://youtu.be/abc")), preset: preset))
+    }
+
+    @Test func ignoresUnknownChoices() throws {
+        let handoff = LinkHandoff()
+        let url = try #require(
+            URL(string: "wrath://add?link=https%3A%2F%2Fyoutu.be%2Fabc&kind=images&quality=-4&start=yes"))
+        #expect(handoff.receive(url))
+        #expect(handoff.take()?.preset == SharePreset.none)
     }
 }

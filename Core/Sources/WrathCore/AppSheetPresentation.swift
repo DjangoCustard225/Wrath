@@ -3,13 +3,13 @@ import Foundation
 public enum AppSheet: Equatable, Identifiable, Sendable {
     case addLink
     /// The add-link screen with a link filled in, from a reconnect retry or a shortcut.
-    case prefilledLink(URL)
+    case prefilledLink(SharedLink)
     case download(UUID)
     case redditLogin
     public var id: String {
         switch self {
         case .addLink: "add-link"
-        case .prefilledLink(let url): "prefilled-link-" + url.absoluteString
+        case .prefilledLink(let link): "prefilled-link-" + link.url.absoluteString
         case .download(let id): "download-" + id.uuidString
         case .redditLogin: "reddit-login"
         }

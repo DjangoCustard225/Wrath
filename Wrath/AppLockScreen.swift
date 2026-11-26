@@ -32,6 +32,7 @@ struct AppLockScreen: View {
 private struct LockedPane: View {
     @Bindable var lock: AppLockController
     @State private var pin = ""
+    @State private var failedAttempts = 0
 
     var body: some View {
         ScrollView {
@@ -73,12 +74,16 @@ private struct LockedPane: View {
         }
         .scrollDismissesKeyboard(.interactively)
         .onChange(of: lock.revision) { _, _ in pin = "" }
+        .sensoryFeedback(.error, trigger: failedAttempts)
     }
 
     private func unlock() {
         let value = pin
         pin = ""
-        Task { await lock.unlock(pin: value) }
+        Task {
+            let unlocked = await lock.unlock(pin: value)
+            if !unlocked { failedAttempts += 1 }
+        }
     }
 }
 

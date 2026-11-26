@@ -44,7 +44,14 @@ struct GalleryDetailsView: View {
                         }.foregroundStyle(.primary).modifier(MediaCardStyle())
                     }
                     .buttonStyle(.plain)
-                    .contextMenu { ShareLink(item: url) { Label("Share photo", systemImage: "square.and.arrow.up") } }
+                    .contextMenu {
+                        ShareLink(item: url) { Label("Share photo", systemImage: "square.and.arrow.up") }
+                        if PhotoLibraryCompatibility.resource(forFilename: url.lastPathComponent) != nil {
+                            Button("Save to Photos", systemImage: "photo.badge.plus") {
+                                Task { await store.saveToPhotos(urls: [url]) }
+                            }
+                        }
+                    }
                 }
             }
             .padding(.horizontal, 18).padding(.top, 16).padding(.bottom, 24)
@@ -56,6 +63,11 @@ struct GalleryDetailsView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
                     Button("Share photos", systemImage: "square.and.arrow.up") { sheet = .share }
+                    if PhotoLibraryCompatibility.canSave(item.job) {
+                        Button("Save to Photos", systemImage: "photo.badge.plus") {
+                            Task { await store.saveToPhotos([item]) }
+                        }
+                    }
                     Button("Rename gallery", systemImage: "pencil") { sheet = .rename }
                 } label: {
                     Label("Gallery actions", systemImage: "ellipsis.circle")
@@ -69,16 +81,8 @@ struct GalleryDetailsView: View {
                     FilePreview(url: first, additionalURLs: Array(urls.dropFirst()), selectedIndex: index)
                 }
             case .rename: RenameFileSheet(item: item, store: store)
-            case .share: GalleryShareSheet(urls: urls)
+            case .share: ActivityShareSheet(urls: urls)
             }
         }
     }
-}
-
-private struct GalleryShareSheet: UIViewControllerRepresentable {
-    let urls: [URL]
-    func makeUIViewController(context: Context) -> UIActivityViewController {
-        UIActivityViewController(activityItems: urls, applicationActivities: nil)
-    }
-    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }

@@ -18,6 +18,9 @@ import WrathCore
     private var lastAdvance: TimeInterval = 0
     private static let heartbeatInterval: TimeInterval = 3
 
+    /// Whether iOS is showing its own continued-processing progress for this download.
+    var showsSystemProgress: Bool { continuedTask != nil }
+
     /// Returns a user-facing notice only when iOS 26 declines continued work.
     func begin(id: UUID, title: String, onExpiration: @escaping () -> Void) async throws -> String? {
         try Task.checkCancellation()

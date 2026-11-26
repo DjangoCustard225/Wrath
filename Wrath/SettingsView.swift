@@ -4,6 +4,8 @@ import WrathCore
 
 struct SettingsView: View {
     @Bindable var store: DownloadStore
+    @AppStorage(PreferenceKey.notifyWhenFinished) private var notifyWhenFinished = true
+    @AppStorage(PreferenceKey.suggestCopiedLinks) private var suggestCopiedLinks = true
     private var usage: String? {
         store.storage.map { MediaLabels.bytes($0.savedBytes + $0.temporaryBytes + $0.cacheBytes) }
     }
@@ -14,6 +16,12 @@ struct SettingsView: View {
                     Picker("Default format", selection: $store.kind) {
                         ForEach([MediaKind.video, .audio], id: \.self) { Text($0.rawValue.capitalized).tag($0) }
                     }
+                    Toggle("Notify when finished", isOn: $notifyWhenFinished)
+                        .onChange(of: notifyWhenFinished) { _, enabled in
+                            if enabled { DownloadNotifier.requestPermissionIfNeeded() }
+                        }
+                    Toggle("Suggest copied links", isOn: $suggestCopiedLinks)
+                        .onChange(of: suggestCopiedLinks) { _, _ in CopiedLinkDetector.shared.refresh() }
                 }
                 if BackgroundTaskSetup.needsFix {
                     Section {
